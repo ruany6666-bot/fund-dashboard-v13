@@ -7,8 +7,9 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import plotly.express as px
 import plotly.graph_objects as go
+from supabase import create_client
 
-st.set_page_config(page_title="阮嘤基金投资工作台 V26", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="阮嘤基金投资工作台 V27", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 HEADERS={"User-Agent":"Mozilla/5.0"}
 TZ=ZoneInfo("Asia/Shanghai")
@@ -93,6 +94,23 @@ section[data-testid="stSidebar"] [data-testid="stMetric"]{
 .statusdot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#18a66a;margin-right:5px}
 .quickbar{display:flex;gap:7px;flex-wrap:wrap;margin:2px 0 12px}
 .quickpill{background:#f6f8fb;border:1px solid #e6eaf0;border-radius:999px;padding:5px 10px;font-size:12px;color:#596579}
+
+/* ===== V27 手机竖屏优化 ===== */
+@media(max-width:700px){
+  .block-container{padding:.35rem .45rem 1.4rem!important}
+  section[data-testid="stSidebar"]{width:86vw!important;max-width:330px!important}
+  h1{font-size:1.28rem!important}
+  h2{font-size:1.02rem!important}
+  [data-testid="stMetric"]{padding:8px 9px!important}
+  .terminalbar{grid-template-columns:1fr 1fr!important;gap:6px!important}
+  .terminalcell{min-height:50px!important;padding:7px 9px!important}
+  .terminalcell .k{font-size:10px!important}
+  .terminalcell .v{font-size:13px!important}
+  .quickbar{gap:5px!important}
+  .quickpill{font-size:11px!important;padding:4px 8px!important}
+  section[data-testid="stSidebar"] div[role="radiogroup"] > label{min-height:47px!important;font-size:14px!important}
+}
+
 @media(max-width:900px){
  .terminalbar{grid-template-columns:1fr 1fr}
  .terminalcell{min-height:54px}
@@ -105,6 +123,38 @@ section[data-testid="stSidebar"] [data-testid="stMetric"]{
 }
 </style>
 """, unsafe_allow_html=True)
+
+
+def get_cloud():
+    try:
+        url=st.secrets["SUPABASE_URL"]
+        # Streamlit 是服务端运行环境：优先使用仅保存在 Streamlit Secrets 的服务端密钥。
+        # 若未配置，则回退到 Publishable Key（此时受 RLS 限制）。
+        key=st.secrets.get("SUPABASE_SERVICE_KEY", st.secrets.get("SUPABASE_KEY"))
+        if not key:
+            return None
+        return create_client(url,key)
+    except Exception:
+        return None
+
+CLOUD=get_cloud()
+
+def cloud_select(table):
+    if not CLOUD:return []
+    try:return CLOUD.table(table).select("*").execute().data or []
+    except Exception:return []
+
+def cloud_upsert(table,rows,on_conflict=None):
+    if not CLOUD:return False
+    try:
+        q=CLOUD.table(table).upsert(rows,on_conflict=on_conflict) if on_conflict else CLOUD.table(table).upsert(rows)
+        q.execute();return True
+    except Exception:return False
+
+def cloud_insert(table,rows):
+    if not CLOUD:return False
+    try:CLOUD.table(table).insert(rows).execute();return True
+    except Exception:return False
 
 DEFAULT_RULES={"纳指基础":50,"纳指机会":100,"CPO基础":20,"CPO机会":40,"半导体基础":10,"半导体机会":20,"黄金基础":50,"建信中档":50,"建信机会":100}
 DEFAULT_PORT=pd.DataFrame([
@@ -129,10 +179,28 @@ def load_json(path,default):
 def save_json(path,obj):
     with open(path,"w",encoding="utf-8") as f:json.dump(obj,f,ensure_ascii=False,indent=2)
 def load_port():
+    if CLOUD:
+        rows=cloud_select("portfolio")
+        if rows:
+            x=pd.DataFrame(rows).rename(columns={"fund_name":"基金","amount":"金额","position_type":"定位","action":"动作","target_amount":"目标金额"})
+            expo=dict(zip(DEFAULT_PORT["基金"],DEFAULT_PORT["主要暴露"]))
+            x["主要暴露"]=x["基金"].map(expo).fillna("待分析")
+            for c in ["基金","金额","定位","动作","目标金额"]:
+                if c not in x.columns:x[c]=None
+            return x[["基金","金额","主要暴露","定位","动作","目标金额"]]
     try:return pd.read_csv(PORT_FILE)
     except:return DEFAULT_PORT.copy()
+
 def save_port(df):
     df.to_csv(PORT_FILE,index=False,encoding="utf-8-sig")
+    if CLOUD:
+        rows=[]
+        for _,r in df.iterrows():
+            rows.append({"fund_name":str(r["基金"]),"amount":float(r["金额"]) if pd.notna(r["金额"]) else 0,
+                         "position_type":str(r["定位"]) if pd.notna(r["定位"]) else "",
+                         "action":str(r["动作"]) if pd.notna(r["动作"]) else "",
+                         "target_amount":float(r["目标金额"]) if pd.notna(r["目标金额"]) else 0})
+        cloud_upsert("portfolio",rows,on_conflict="fund_name")
 
 rules=load_json(RULE_FILE,DEFAULT_RULES)
 budget=load_json(BUDGET_FILE,{"月预算":4000})
@@ -357,7 +425,7 @@ m,sec,news,S=compute()
 
 with st.sidebar:
     st.markdown("## 📊 阮嘤基金")
-    st.caption("V26 · 全景投研版")
+    st.caption("V27 · 手机云端版")
     page=st.radio("功能导航",[
         "🏠 今日驾驶舱","📈 市场看板","▦ 板块中心","💼 基金中心","📰 新闻中心",
         "🔥 机会与风险","🧠 决策大脑","📅 事件日历","🔗 重合度分析","🧬 底层穿透",
@@ -371,6 +439,7 @@ with st.sidebar:
         st.cache_data.clear();st.rerun()
     st.caption("自动刷新：60秒")
     st.caption("新闻库：" + (f"🟢 {len(news)} 条" if not news.empty else "🔴 暂不可用"))
+    st.caption("云端同步：" + ("🟢 已连接" if CLOUD else "🟠 未连接"))
 
 def render_news_cards(df,limit=20,prefix="n"):
     if df.empty:
@@ -873,7 +942,10 @@ def render(page):
                  **{f"建议_{k}":v for k,v in {"纳指":S["nasb"],"黄金":S["goldb"],"CPO":S["cpob"],"半导体":S["semib"],"建信":S["jxb"]}.items()},
                  **{f"实际_{k}":v for k,v in actual.items()}}
             pd.DataFrame([rec]).to_csv(LOG_FILE,mode="a",header=not os.path.exists(LOG_FILE),index=False,encoding="utf-8-sig")
-            st.success("已保存")
+            if CLOUD:
+                suggested={"纳指":S["nasb"],"黄金":S["goldb"],"CPO":S["cpob"],"半导体":S["semib"],"建信":S["jxb"]}
+                cloud_insert("investment_logs",[{"log_date":datetime.now(TZ).strftime("%Y-%m-%d"),"fund_name":k,"suggested_amount":float(suggested[k]),"actual_amount":float(v),"note":S["state"]} for k,v in actual.items()])
+            st.success("已保存；云端连接正常时会自动同步")
         if os.path.exists(LOG_FILE):
             lg=pd.read_csv(LOG_FILE)
             st.dataframe(lg.tail(30),hide_index=True,use_container_width=True)
@@ -887,13 +959,32 @@ def render(page):
             st.download_button("下载投资日志 CSV",lg.to_csv(index=False).encode("utf-8-sig"),"investment_log.csv","text/csv")
         else: st.caption("保存第一条记录后开始形成历史。")
 
+    elif page=="☁️ 云端同步":
+        st.subheader("云端同步状态")
+        a,b,c=st.columns(3)
+        a.metric("Supabase","已连接" if CLOUD else "未连接")
+        b.metric("当前持仓",len(PORT))
+        c.metric("云端快照",len(cloud_select("portfolio_snapshots")) if CLOUD else 0)
+        if CLOUD:
+            if "SUPABASE_SERVICE_KEY" in st.secrets:
+                st.success("已使用服务端密钥连接 Supabase，可跨设备持久化保存。")
+            else:
+                st.info("已使用 Publishable Key 连接；由于 RLS 已开启，写入可能被数据库拒绝。")
+            if st.button("把当前持仓同步到云端",use_container_width=True):
+                save_port(PORT);st.success("已发起同步")
+        else:
+            st.warning("没有读取到 SUPABASE_URL / SUPABASE_KEY。")
+        st.info("手机、iPad、电脑访问同一个网址时，云端数据会保持一致。")
+
     elif page=="🧾 持仓管理":
         st.subheader("编辑当前持仓")
         edited=st.data_editor(PORT,use_container_width=True,hide_index=True,num_rows="dynamic")
         if st.button("保存持仓修改"):
             save_port(edited)
             save_snapshot(edited)
-            st.success("已保存到当前工作台，并记录一次持仓快照")
+            if CLOUD:
+                cloud_insert("portfolio_snapshots",[{"snapshot_time":datetime.now(TZ).isoformat(),"fund_name":str(r["基金"]),"amount":float(r["金额"])} for _,r in edited.iterrows()])
+            st.success("已保存；云端连接正常时会同步到其他设备")
         st.download_button("下载持仓备份 CSV",edited.to_csv(index=False).encode("utf-8-sig"),"portfolio_backup.csv","text/csv")
         uploaded=st.file_uploader("恢复持仓备份",type=["csv"])
         if uploaded is not None:
@@ -914,4 +1005,4 @@ def render(page):
         st.info("核心原则：价格下跌 ≠ 自动抄底。只有回撤 + 基本面未明显恶化，才进入机会档。")
 
 render(page)
-st.caption("V26：新增底层穿透、真实重仓股重合矩阵、仓位目标、数据健康、一键备份，并增强组合体检。")
+st.caption("V27：新增手机竖屏优化与 Supabase 云端同步基础。")

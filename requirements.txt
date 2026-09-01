@@ -3,3 +3,5 @@ pandas>=2.0
 requests>=2.31
 plotly>=5.20
 feedparser>=6.0
+
+supabase>=2.5
