@@ -3,4 +3,3 @@ pandas>=2.0
 requests>=2.31
 plotly>=5.20
 feedparser>=6.0
-streamlit-autorefresh>=1.0.1
