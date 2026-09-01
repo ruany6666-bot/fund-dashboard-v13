@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import requests, feedparser, json, os, re, io
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -9,7 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client
 
-st.set_page_config(page_title="阮嘤基金投资工作台 V27", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="阮嘤基金投资工作台 V28", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 HEADERS={"User-Agent":"Mozilla/5.0"}
 TZ=ZoneInfo("Asia/Shanghai")
@@ -120,6 +121,10 @@ section[data-testid="stSidebar"] [data-testid="stMetric"]{
  .block-container{padding:.45rem}
  section[data-testid="stSidebar"]{width:235px!important}
  [data-testid="column"]{min-width:48%!important}
+}
+@media(max-width:700px){
+  [data-testid="stPlotlyChart"]{max-height:440px!important}
+  .card{padding:10px 11px!important}
 }
 </style>
 """, unsafe_allow_html=True)
@@ -264,7 +269,7 @@ NEG=["限制","制裁","禁令","关税","下调","调查","restrict","sanction"
 
 def get_json(url,params=None):
     try:
-        r=requests.get(url,params=params,headers=HEADERS,timeout=8);r.raise_for_status();return r.json()
+        r=requests.get(url,params=params,headers=HEADERS,timeout=4);r.raise_for_status();return r.json()
     except:return None
 def yahoo(symbol,range_="5d"):
     j=get_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(symbol)}",{"range":range_,"interval":"1d"})
@@ -279,7 +284,7 @@ def eastmoney(secid):
     except:return None,None
 def tencent(code):
     try:
-        r=requests.get(f"https://qt.gtimg.cn/q={code}",headers=HEADERS,timeout=8);r.encoding="gbk"
+        r=requests.get(f"https://qt.gtimg.cn/q={code}",headers=HEADERS,timeout=4);r.encoding="gbk"
         p=r.text.split('="',1)[1].rsplit('"',1)[0].split("~");cur,pre=float(p[3]),float(p[4]);return cur,(cur/pre-1)*100
     except:return None,None
 def fallback(*fns):
@@ -299,17 +304,34 @@ def markets():
         ("纳斯达克",lambda:yahoo("^IXIC")[:2]),("标普500",lambda:yahoo("^GSPC")[:2]),("SOX",lambda:yahoo("^SOX")[:2]),
         ("VIX",lambda:yahoo("^VIX")[:2]),("美债10Y",lambda:yahoo("^TNX")[:2]),("黄金",lambda:yahoo("GC=F")[:2])
     ]
-    return pd.DataFrame([[n,*fn()] for n,fn in specs],columns=["市场","价格","涨跌"])
+    rows=[]
+    with ThreadPoolExecutor(max_workers=9) as ex:
+        futs={ex.submit(fn):n for n,fn in specs}
+        for fut in as_completed(futs):
+            n=futs[fut]
+            try:p,c=fut.result()
+            except Exception:p,c=None,None
+            rows.append([n,p,c])
+    order={n:i for i,(n,_) in enumerate(specs)}
+    rows.sort(key=lambda r:order[r[0]])
+    return pd.DataFrame(rows,columns=["市场","价格","涨跌"])
 
 @st.cache_data(ttl=180)
 def sectors():
-    rows=[]
-    for sec,stocks in BASKETS.items():
+    def one_sector(item):
+        sec,stocks=item
         vals=[];detail=[]
-        for name,ysym,tcode in stocks:
-            _,p=tencent(tcode)
-            if p is not None:vals.append(p);detail.append(f"{name} {p:+.1f}%")
-        rows.append([sec,sum(vals)/len(vals) if vals else None," ｜ ".join(detail) if detail else "数据暂不可用"])
+        with ThreadPoolExecutor(max_workers=min(6,len(stocks))) as ex:
+            futs={ex.submit(tencent,tcode):name for name,ysym,tcode in stocks}
+            for fut in as_completed(futs):
+                name=futs[fut]
+                try:_,p=fut.result()
+                except Exception:p=None
+                if p is not None:
+                    vals.append(p);detail.append(f"{name} {p:+.1f}%")
+        return [sec,sum(vals)/len(vals) if vals else None," ｜ ".join(detail) if detail else "数据暂不可用"]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        rows=list(ex.map(one_sector,BASKETS.items()))
     return pd.DataFrame(rows,columns=["板块","涨跌","核心成分"])
 
 @st.cache_data(ttl=300)
@@ -366,8 +388,9 @@ def summary_cn(title,topic,score):
     return f"{direction}倾向。{impact}"
 
 @st.cache_data(ttl=600)
-def getnews():
-    queries=[
+def getnews(mode="lite"):
+    # V28：首屏只取核心新闻，新闻中心再加载完整新闻库，避免手机首次打开被几十个RSS请求阻塞。
+    full_queries=[
         "NVIDIA AI data center when:3d","OpenAI data center when:3d","Microsoft Meta Google AI capex when:3d","Blackwell Rubin GPU demand when:7d",
         "1.6T optical module CPO when:7d","800G optical module China when:7d","中际旭创 新易盛 光模块 when:7d","Lumentum optical transceiver when:7d",
         "HBM Micron SK Hynix Samsung when:7d","DRAM NAND memory price when:7d","Kioxia SanDisk memory when:7d",
@@ -377,23 +400,44 @@ def getnews():
         "创新药 license-out FDA when:7d","人形机器人 humanoid robot when:7d","铜 紫金矿业 洛阳钼业 when:7d","电网 储能 电力设备 when:7d",
         "白酒 消费 A股 when:7d","券商 东方财富 中信证券 when:7d"
     ]
-    rows=[];seen=set()
-    for q in queries:
+    lite_queries=[
+        "NVIDIA AI data center when:3d","1.6T optical module CPO when:7d",
+        "HBM Micron SK Hynix Samsung when:7d","中国 半导体设备 北方华创 中微公司 when:7d",
+        "gold Federal Reserve Treasury yield when:3d","US China semiconductor export control when:7d",
+        "A股 政策 证监会 科技股 when:3d"
+    ]
+    queries = full_queries if mode=="full" else lite_queries
+
+    def fetch_one(q):
+        out=[]
         try:
-            feed=feedparser.parse(f"https://news.google.com/rss/search?q={quote(q)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans")
-            for e in feed.entries[:10]:
+            url=f"https://news.google.com/rss/search?q={quote(q)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+            r=requests.get(url,headers=HEADERS,timeout=5)
+            r.raise_for_status()
+            feed=feedparser.parse(r.content)
+            for e in feed.entries[:8]:
                 title=e.get("title","").strip()
-                if not title:continue
+                if title:
+                    out.append((title,e.get("published",""),e.get("link","")))
+        except Exception:
+            pass
+        return out
+
+    rows=[]; seen=set()
+    # 并发抓取，避免25个RSS串行等待。
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs=[ex.submit(fetch_one,q) for q in queries]
+        for fut in as_completed(futs):
+            for title,pub,link in fut.result():
                 key=re.sub(r"\s+"," ",title.lower())
-                if key in seen:continue
+                if key in seen: continue
                 seen.add(key)
                 lo=title.lower()
                 score=50+sum(8 for x in POS if x.lower() in lo)-sum(10 for x in NEG if x.lower() in lo)
-                topic=topic_from_title(lo);grade=source_grade(title)
+                topic=topic_from_title(lo); grade=source_grade(title)
                 importance=min(5,max(1,2+round(abs(score-50)/10)+(1 if grade=="A" else 0)))
-                pub=e.get("published","")
-                rows.append([topic,max(0,min(100,score)),grade,importance,title,pub,e.get("link",""),parse_dt(pub)])
-        except:pass
+                rows.append([topic,max(0,min(100,score)),grade,importance,title,pub,link,parse_dt(pub)])
+
     df=pd.DataFrame(rows,columns=["主题","分数","可信度","重要度","新闻","时间","链接","发布时间"])
     if not df.empty:
         df["摘要"]=df.apply(lambda r:summary_cn(r["新闻"],r["主题"],r["分数"]),axis=1)
@@ -402,7 +446,7 @@ def getnews():
     return df
 
 def compute():
-    m=markets();sec=sectors();news=getnews()
+    m=markets();sec=sectors();news=getnews("lite")
     def v(name,field,default=0):
         x=m[m["市场"]==name]
         return float(x.iloc[0][field]) if len(x) and pd.notna(x.iloc[0][field]) else default
@@ -425,19 +469,19 @@ m,sec,news,S=compute()
 
 with st.sidebar:
     st.markdown("## 📊 阮嘤基金")
-    st.caption("V27 · 手机云端版")
+    st.caption("V28 · 手机极速版")
     page=st.radio("功能导航",[
         "🏠 今日驾驶舱","📈 市场看板","▦ 板块中心","💼 基金中心","📰 新闻中心",
         "🔥 机会与风险","🧠 决策大脑","📅 事件日历","🔗 重合度分析","🧬 底层穿透",
         "🎯 仓位目标","🛰 数据健康","💰 资金计划","🩺 组合体检","📒 投资日志",
-        "🧾 持仓管理","⚙️ 投资规则"
+        "☁️ 云端同步","🧾 持仓管理","⚙️ 投资规则"
     ],label_visibility="collapsed")
     st.markdown("---")
     st.metric("今日建议",f"¥{S['total']}")
     st.caption(f"纳指{S['nasb']} · 黄金{S['goldb']} · CPO{S['cpob']} · 半导体{S['semib']} · 建信{S['jxb']}")
     if st.button("🔄 立即刷新",use_container_width=True):
         st.cache_data.clear();st.rerun()
-    st.caption("自动刷新：60秒")
+    st.caption("自动刷新：180秒 · 可手动立即刷新")
     st.caption("新闻库：" + (f"🟢 {len(news)} 条" if not news.empty else "🔴 暂不可用"))
     st.caption("云端同步：" + ("🟢 已连接" if CLOUD else "🟠 未连接"))
 
@@ -627,7 +671,7 @@ def save_snapshot(port):
     tmp["日期"]=now
     tmp.to_csv(SNAPSHOT_FILE,mode="a",header=not os.path.exists(SNAPSHOT_FILE),index=False,encoding="utf-8-sig")
 
-@st.fragment(run_every=60)
+@st.fragment(run_every="180s")
 def render(page):
 
 
@@ -719,6 +763,7 @@ def render(page):
         render_news_cards(rel,20,"fund")
 
     elif page=="📰 新闻中心":
+        news=getnews("full")
         if news.empty:
             st.warning("新闻源暂不可用")
         else:
@@ -886,7 +931,7 @@ def render(page):
         b.metric("新闻数量",len(news) if news is not None else 0)
         c.metric("持仓快照",HOLDINGS_ASOF)
         st.subheader("刷新与数据边界")
-        st.info("行情页60秒刷新；板块180秒；新闻600秒。基金持仓不是实时数据，按季报快照展示。板块涨跌是核心成分代理，不冒充官方行业指数。")
+        st.info("页面180秒轻量自动刷新；行情缓存60秒；板块180秒；新闻600秒。基金持仓不是实时数据，按季报快照展示。板块涨跌是核心成分代理，不冒充官方行业指数。")
         st.warning("Streamlit Community Cloud 的本地文件可能在重启/重新部署后丢失，所以日志、规则、持仓修改不能视为永久云存储。")
         st.subheader("一键备份")
         st.download_button("下载全部工作台数据备份 ZIP",export_backup_bytes(),"ruanying_dashboard_backup.zip","application/zip",use_container_width=True)
@@ -941,11 +986,26 @@ def render(page):
             rec={"日期":datetime.now(TZ).strftime("%Y-%m-%d %H:%M"),"市场状态":S["state"],"建议总额":S["total"],
                  **{f"建议_{k}":v for k,v in {"纳指":S["nasb"],"黄金":S["goldb"],"CPO":S["cpob"],"半导体":S["semib"],"建信":S["jxb"]}.items()},
                  **{f"实际_{k}":v for k,v in actual.items()}}
-            pd.DataFrame([rec]).to_csv(LOG_FILE,mode="a",header=not os.path.exists(LOG_FILE),index=False,encoding="utf-8-sig")
-            if CLOUD:
-                suggested={"纳指":S["nasb"],"黄金":S["goldb"],"CPO":S["cpob"],"半导体":S["semib"],"建信":S["jxb"]}
-                cloud_insert("investment_logs",[{"log_date":datetime.now(TZ).strftime("%Y-%m-%d"),"fund_name":k,"suggested_amount":float(suggested[k]),"actual_amount":float(v),"note":S["state"]} for k,v in actual.items()])
-            st.success("已保存；云端连接正常时会自动同步")
+            duplicate=False
+            if os.path.exists(LOG_FILE):
+                try:
+                    oldlog=pd.read_csv(LOG_FILE)
+                    if len(oldlog):
+                        last=oldlog.iloc[-1]
+                        same_day=str(last.get("日期",""))[:10]==rec["日期"][:10]
+                        same_actual=all(float(last.get(f"实际_{k}",-1))==float(v) for k,v in actual.items())
+                        # 同一天、同一组实际金额，视为重复点击，不再次写入。
+                        duplicate=same_day and same_actual
+                except Exception:
+                    duplicate=False
+            if duplicate:
+                st.warning("检测到今天已有相同投资记录，本次未重复保存。")
+            else:
+                pd.DataFrame([rec]).to_csv(LOG_FILE,mode="a",header=not os.path.exists(LOG_FILE),index=False,encoding="utf-8-sig")
+                if CLOUD:
+                    suggested={"纳指":S["nasb"],"黄金":S["goldb"],"CPO":S["cpob"],"半导体":S["semib"],"建信":S["jxb"]}
+                    cloud_insert("investment_logs",[{"log_date":datetime.now(TZ).strftime("%Y-%m-%d"),"fund_name":k,"suggested_amount":float(suggested[k]),"actual_amount":float(v),"note":S["state"]} for k,v in actual.items()])
+                st.success("已保存；云端连接正常时会自动同步")
         if os.path.exists(LOG_FILE):
             lg=pd.read_csv(LOG_FILE)
             st.dataframe(lg.tail(30),hide_index=True,use_container_width=True)
