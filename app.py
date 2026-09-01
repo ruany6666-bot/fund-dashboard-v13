@@ -4,11 +4,15 @@ import pandas as pd
 import requests, feedparser, json, os
 from urllib.parse import quote
 from datetime import datetime
+from zoneinfo import ZoneInfo
+from streamlit_autorefresh import st_autorefresh
 import plotly.express as px
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="阮嘤基金投资工作台 V19", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="阮嘤基金投资工作台 V20", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 H={"User-Agent":"Mozilla/5.0"}
+TZ=ZoneInfo("Asia/Shanghai")
+st_autorefresh(interval=60*1000, key="market_auto_refresh")
 DATA="data"; os.makedirs(DATA,exist_ok=True)
 RULE_FILE=os.path.join(DATA,"rules.json")
 LOG_FILE=os.path.join(DATA,"investment_log.csv")
@@ -89,6 +93,19 @@ def yahoo(s):
         a=[float(x) for x in j["chart"]["result"][0]["indicators"]["quote"][0]["close"] if x is not None]
         return a[-1],(a[-1]/a[-2]-1)*100
     except:return None,None
+
+def eastmoney(secid):
+    j=gj("https://push2.eastmoney.com/api/qt/stock/get",{"secid":secid,"fields":"f43,f170"})
+    try:return j["data"]["f43"]/100,j["data"]["f170"]/100
+    except:return None,None
+def fallback(*fns):
+    for fn in fns:
+        try:
+            p,c=fn()
+            if p is not None and c is not None:return p,c
+        except:pass
+    return None,None
+
 def tq(code):
     try:
         r=requests.get(f"https://qt.gtimg.cn/q={code}",headers=H,timeout=7);r.encoding="gbk"
@@ -97,8 +114,14 @@ def tq(code):
 
 @st.cache_data(ttl=60)
 def markets():
-    mp={"上证":"000001.SS","创业板":"399006.SZ","科创50":"000688.SS","纳斯达克":"^IXIC","标普500":"^GSPC","SOX":"^SOX","VIX":"^VIX","美债10Y":"^TNX","黄金":"GC=F"}
-    return pd.DataFrame([[n,*yahoo(s)] for n,s in mp.items()],columns=["市场","价格","涨跌"])
+    specs=[
+        ("上证",lambda:fallback(lambda:eastmoney("1.000001"),lambda:tq("sh000001"),lambda:yahoo("000001.SS"))),
+        ("创业板",lambda:fallback(lambda:eastmoney("0.399006"),lambda:tq("sz399006"),lambda:yahoo("399006.SZ"))),
+        ("科创50",lambda:fallback(lambda:eastmoney("1.000688"),lambda:tq("sh000688"),lambda:yahoo("000688.SS"))),
+        ("纳斯达克",lambda:yahoo("^IXIC")),("标普500",lambda:yahoo("^GSPC")),("SOX",lambda:yahoo("^SOX")),
+        ("VIX",lambda:yahoo("^VIX")),("美债10Y",lambda:yahoo("^TNX")),("黄金",lambda:yahoo("GC=F"))
+    ]
+    return pd.DataFrame([[n,*fn()] for n,fn in specs],columns=["市场","价格","涨跌"])
 @st.cache_data(ttl=180)
 def sectors():
     out=[]
@@ -124,9 +147,9 @@ def getnews():
                 topic="CPO/光通信" if any(x in lo for x in ["cpo","optical","光模块","1.6t"]) else "HBM/存储" if any(x in lo for x in ["hbm","micron","hynix","samsung"]) else "AI/算力" if any(x in lo for x in ["nvidia","英伟达","ai data"]) else "黄金/宏观" if any(x in lo for x in ["gold","fed","treasury","黄金"]) else "半导体/政策"
                 grade="A" if any(x in lo for x in ["reuters","路透","federal reserve","公告"]) else "B" if any(x in lo for x in ["bloomberg","彭博","cnbc","证券时报","财联社"]) else "C"
                 importance=min(5,max(2,round(abs(score-50)/10)+2))
-                rows.append([topic,max(0,min(100,score)),grade,importance,t,e.get("published","")])
+                rows.append([topic,max(0,min(100,score)),grade,importance,t,e.get("published",""),e.get("link","")])
         except:pass
-    return pd.DataFrame(rows,columns=["主题","分数","可信度","重要度","新闻","时间"])
+    return pd.DataFrame(rows,columns=["主题","分数","可信度","重要度","新闻","时间","链接"])
 
 m=markets();sec=sectors();news=getnews()
 def v(name,field,default=0):
@@ -148,7 +171,7 @@ state="🔴 风险偏高" if risk>=75 else "🔵 回撤关注" if (nas<=-2 or cp
 # 真导航
 with st.sidebar:
     st.markdown("## 📊 阮嘤基金")
-    st.caption("V19 · 多页面完整版")
+    st.caption("V20 · 交互增强完整版")
     page=st.radio("功能导航",[
         "🏠 今日驾驶舱","📈 市场看板","▦ 板块中心","💼 基金中心","📰 新闻中心",
         "🔥 机会与风险","💰 资金计划","🩺 组合体检","📒 投资日志","⚙️ 投资规则"
@@ -157,10 +180,11 @@ with st.sidebar:
     st.markdown(f"<span class='small'>今日建议</span><div class='big' style='color:#1677ff'>¥{total}</div>",unsafe_allow_html=True)
     st.caption(f"纳指{nasb} · 黄金{goldb} · CPO{cpob} · 半导体{semib} · 建信{jxb}")
     if st.button("🔄 刷新实时数据",use_container_width=True):st.cache_data.clear();st.rerun()
+    st.caption("每 60 秒自动刷新")
     st.caption("数据健康：🟢页面运行　🟢规则引擎　" + ("🟢新闻" if not news.empty else "🔴新闻"))
 
 st.markdown(f"# {page}")
-st.caption(f"{state}　｜　风险温度 {risk}/100　｜　更新时间 {datetime.now().strftime('%H:%M:%S')}")
+st.caption(f"{state}　｜　风险温度 {risk}/100　｜　北京时间 {datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')}　｜　每60秒自动刷新")
 
 if page=="🏠 今日驾驶舱":
     c1,c2,c3,c4,c5=st.columns(5)
@@ -169,20 +193,22 @@ if page=="🏠 今日驾驶舱":
     with A:
         fig=go.Figure(go.Indicator(mode="gauge+number",value=risk,title={"text":"市场风险温度"},gauge={"axis":{"range":[0,100]},"bar":{"thickness":.22},"steps":[{"range":[0,45]},{"range":[45,70]},{"range":[70,100]}]}))
         fig.update_layout(height=220,margin=dict(l=10,r=10,t=40,b=5));st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
-        x,y,z=st.columns(3);x.metric("VIX",f"{vix:.1f}");y.metric("美债10Y",f"{tnx:.2f}");z.metric("SOX",f"{sox:+.2f}%")
+        st.dataframe(pd.DataFrame([["VIX",f"{vix:.2f}"],["美债10Y",f"{tnx:.2f}"],["SOX当日",f"{sox:+.2f}%"]],columns=["风险指标","当前值"]),hide_index=True,use_container_width=True)
     with B:
         st.subheader("📰 最重要的 5 条新闻")
         if news.empty:st.warning("新闻暂不可用")
         else:
             for _,r in news.sort_values("重要度",ascending=False).head(5).iterrows():
                 lab="利好" if r["分数"]>=60 else "利空" if r["分数"]<=40 else "中性";cl="g" if lab=="利好" else "r" if lab=="利空" else "y"
-                st.markdown(f"<div class='card'><span class='tag {cl}'>{lab}</span><b>{r['新闻'][:80]}</b><br><span class='small'>{r['主题']} · 可信度{r['可信度']} · {'★'*r['重要度']}</span></div>",unsafe_allow_html=True)
+                st.markdown(f"<div class='card'><span class='tag {cl}'>{lab}</span><b>{r['新闻']}</b><br><span class='small'>{r['主题']} · 可信度{r['可信度']} · {'★'*r['重要度']}</span></div>",unsafe_allow_html=True)
+                if r.get("链接",""):
+                    st.link_button("打开新闻原文 ↗",r["链接"],key=f"home_news_{r.name}")
     C,D=st.columns(2)
     with C:
         st.subheader("📊 板块涨跌")
-        show=sec[["板块","涨跌"]].copy()
+        show=sec[["板块","涨跌","核心成分"]].copy()
         show["判断"]=show["涨跌"].apply(lambda x:"🔵 回撤关注" if pd.notna(x) and x<=-2 else "🟡 不追涨" if pd.notna(x) and x>=3 else "🟢 正常")
-        st.dataframe(show,hide_index=True,use_container_width=True)
+        st.dataframe(show,hide_index=True,use_container_width=True,height=340)
     with D:
         st.subheader("🔥 今天最值得注意")
         opp=sec.dropna(subset=["涨跌"]).copy()
@@ -196,7 +222,7 @@ elif page=="📈 市场看板":
     for i,(_,r) in enumerate(m.iterrows()):
         if pd.notna(r["价格"]):cols[i%3].metric(r["市场"],f'{r["价格"]:.2f}',f'{r["涨跌"]:+.2f}%')
         else:cols[i%3].metric(r["市场"],"暂不可用")
-    st.info("VIX与美债主要用于控制科技动态仓；SOX用于观察AI/半导体硬件风险偏好。")
+    st.info("A股指数采用多源回退；VIX与美债主要用于控制科技动态仓；SOX用于观察AI/半导体硬件风险偏好。页面每60秒自动刷新。")
 
 elif page=="▦ 板块中心":
     chosen=st.selectbox("选择板块",list(BASKETS.keys()))
@@ -206,7 +232,14 @@ elif page=="▦ 板块中心":
     st.write(r["核心成分"])
     st.subheader("相关重大新闻")
     rel=news[news["主题"].str.contains("CPO" if "CPO" in chosen else "半导体" if "半导体" in chosen else chosen,na=False)]
-    st.dataframe(rel[["主题","分数","可信度","新闻","时间"]].head(10),hide_index=True,use_container_width=True)
+    if rel.empty:
+        st.caption("暂未抓到直接相关新闻。")
+    else:
+        for _,nr in rel.head(10).iterrows():
+            with st.container(border=True):
+                st.write(nr["新闻"])
+                st.caption(f"可信度 {nr['可信度']} · {nr['时间']}")
+                if nr.get("链接",""): st.link_button("打开原文 ↗",nr["链接"],key=f"sector_news_{chosen}_{nr.name}")
     if chosen=="CPO/光通信":st.info(f"对核心CPO基金：当前基础 {rules['CPO基础']} 元；明显回撤且逻辑未坏时提高到 {rules['CPO机会']} 元。")
     elif chosen=="半导体设备":st.info(f"对半导体核心基金：当前基础 {rules['半导体基础']} 元；机会档 {rules['半导体机会']} 元。")
     else:st.caption("该板块属于战术观察池，不自动挤占核心定投资金。")
@@ -225,7 +258,14 @@ elif page=="💼 基金中心":
     st.subheader("相关新闻")
     keys=r["主要暴露"].split("/")
     rel=news[news["主题"].apply(lambda x:any(k.lower() in x.lower() for k in keys))]
-    st.dataframe(rel[["主题","可信度","新闻","时间"]].head(10),hide_index=True,use_container_width=True)
+    if rel.empty:
+        st.caption("暂无匹配新闻。")
+    else:
+        for _,nr in rel.head(10).iterrows():
+            with st.container(border=True):
+                st.write(nr["新闻"])
+                st.caption(f"可信度 {nr['可信度']} · {nr['时间']}")
+                if nr.get("链接",""): st.link_button("打开原文 ↗",nr["链接"],key=f"fund_news_{chosen}_{nr.name}")
 
 elif page=="📰 新闻中心":
     topic=st.selectbox("新闻筛选",["全部"]+sorted(news["主题"].unique().tolist()) if not news.empty else ["全部"])
@@ -234,8 +274,13 @@ elif page=="📰 新闻中心":
     if topic!="全部":x=x[x["主题"]==topic]
     x=x[x["可信度"].isin(grade)] if not x.empty else x
     if not x.empty:
-        x["利好利空"]=x["分数"].apply(lambda z:"🟢利好" if z>=60 else "🔴利空" if z<=40 else "🟡中性")
-        st.dataframe(x[["利好利空","主题","重要度","可信度","新闻","时间"]],hide_index=True,use_container_width=True)
+        x["利好利空"]=x["分数"].apply(lambda z:"🟢 利好" if z>=60 else "🔴 利空" if z<=40 else "🟡 中性")
+        for _,nr in x.iterrows():
+            with st.container(border=True):
+                st.markdown(f"**{nr['利好利空']}｜{nr['主题']}｜重要度 {'★'*int(nr['重要度'])}｜可信度 {nr['可信度']}**")
+                st.write(nr["新闻"])
+                st.caption(nr["时间"])
+                if nr.get("链接",""): st.link_button("打开新闻原文 ↗",nr["链接"],key=f"news_center_{nr.name}")
     else:st.warning("当前筛选没有新闻。")
 
 elif page=="🔥 机会与风险":
@@ -248,6 +293,8 @@ elif page=="🔥 机会与风险":
         st.subheader("🚨 风险 TOP3")
         risks=pd.DataFrame([["美债收益率",tnx,90 if tnx>=4.6 else 60],["VIX",vix,90 if vix>=30 else 55],["政策风险","触发" if policy_bad else "未触发",95 if policy_bad else 30]],columns=["风险","当前","风险分"])
         st.dataframe(risks.sort_values("风险分",ascending=False),hide_index=True,use_container_width=True)
+    st.subheader("🧠 决策解释")
+    st.dataframe(pd.DataFrame([["美债10Y",f"{tnx:.2f}","限制动态仓" if tnx>=4.6 else "压力可控"],["VIX",f"{vix:.2f}","风险偏高" if vix>=30 else "正常"],["SOX",f"{sox:+.2f}%","AI硬件风险偏好"],["CPO代理",f"{cp:+.2f}%","回撤关注" if cp<=-2 else "正常"],["半导体设备代理",f"{sp:+.2f}%","回撤关注" if sp<=-2 else "正常"],["政策风险","触发" if policy_bad else "未触发","动态仓暂停" if policy_bad else "正常"]],columns=["信号","当前值","策略含义"]),hide_index=True,use_container_width=True)
     st.subheader("🧯 下跌预案")
     st.dataframe(pd.DataFrame([["纳指","≤-2.5%","AI逻辑正常+VIX可控",f"{rules['纳指基础']}→{rules['纳指机会']}"],["CPO","≤-2%","无重大政策利空",f"{rules['CPO基础']}→{rules['CPO机会']}"],["半导体","≤-2%","产业逻辑正常",f"{rules['半导体基础']}→{rules['半导体机会']}"],["基本面恶化","任何跌幅","高可信重大利空","不机械抄底"]],columns=["对象","触发","确认","动作"]),hide_index=True,use_container_width=True)
 
@@ -257,7 +304,7 @@ elif page=="💰 资金计划":
     spent=0
     if os.path.exists(LOG_FILE):
         try:
-            lg=pd.read_csv(LOG_FILE);lg["日期"]=pd.to_datetime(lg["日期"]);now=datetime.now()
+            lg=pd.read_csv(LOG_FILE);lg["日期"]=pd.to_datetime(lg["日期"]);now=datetime.now(TZ)
             this=lg[(lg["日期"].dt.year==now.year)&(lg["日期"].dt.month==now.month)]
             cols=[c for c in this.columns if c.startswith("实际_")];spent=float(this[cols].sum().sum()) if cols else 0
         except:pass
@@ -286,7 +333,7 @@ elif page=="📒 投资日志":
     for k,dft in [("纳指",nasb),("黄金",goldb),("CPO",cpob),("半导体",semib),("建信",jxb)]:
         actual[k]=st.number_input(k,min_value=0,value=int(dft),step=10,key="log"+k)
     if st.button("保存今日投资记录"):
-        rec={"日期":datetime.now().strftime("%Y-%m-%d %H:%M"),"市场状态":state,"建议总额":total,
+        rec={"日期":datetime.now(TZ).strftime("%Y-%m-%d %H:%M"),"市场状态":state,"建议总额":total,
              **{f"建议_{k}":v for k,v in {"纳指":nasb,"黄金":goldb,"CPO":cpob,"半导体":semib,"建信":jxb}.items()},
              **{f"实际_{k}":v for k,v in actual.items()}}
         pd.DataFrame([rec]).to_csv(LOG_FILE,mode="a",header=not os.path.exists(LOG_FILE),index=False,encoding="utf-8-sig");st.success("已保存")
@@ -300,4 +347,4 @@ elif page=="⚙️ 投资规则":
     if st.button("保存投资规则"):save_json(RULE_FILE,edited);st.success("已保存。刷新后决策引擎按新规则运行。")
     st.info("核心原则：价格跌了不等于可以买。只有价格回撤 + 基本面没有明显恶化，才进入机会档。")
 
-st.caption("数据健康说明：公开行情/新闻可能延迟、限流或暂不可用；不可用时不伪造数值。板块涨跌使用核心成分股代理，不冒充官方板块指数。")
+st.caption("V20：北京时间显示、每60秒自动刷新、新闻可点击、A股多源回退、iPad完整信息优化。公开行情/新闻可能延迟或限流；不可用时不伪造数值。")
