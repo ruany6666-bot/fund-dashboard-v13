@@ -10,7 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client
 
-st.set_page_config(page_title="阮嘤基金投资工作台 V28", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="阮嘤基金投资工作台 V33", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 HEADERS={"User-Agent":"Mozilla/5.0"}
 TZ=ZoneInfo("Asia/Shanghai")
@@ -21,6 +21,7 @@ BUDGET_FILE=os.path.join(DATA_DIR,"budget.json")
 PORT_FILE=os.path.join(DATA_DIR,"portfolio.csv")
 SNAPSHOT_FILE=os.path.join(DATA_DIR,"portfolio_snapshots.csv")
 EVENT_FILE=os.path.join(DATA_DIR,"event_calendar.json")
+HOLDINGS_FILE=os.path.join(DATA_DIR,"fund_holdings.json")
 
 
 st.markdown("""
@@ -117,6 +118,61 @@ section[data-testid="stSidebar"] [data-testid="stMetric"]{
  .terminalcell{min-height:54px}
 }
 
+
+
+/* ===== V31 顶部二级导航 ===== */
+div[role="radiogroup"][aria-label="二级导航"]{
+  display:flex!important;flex-wrap:wrap!important;gap:6px!important;margin:2px 0 10px!important;
+}
+div[role="radiogroup"][aria-label="二级导航"] > label{
+  min-height:36px!important;padding:4px 10px!important;border:1px solid #e3e8ef!important;
+  border-radius:999px!important;background:#fff!important;
+}
+div[role="radiogroup"][aria-label="二级导航"] > label:has(input:checked){
+  background:#eaf3ff!important;border-color:#b8d5ff!important;color:#1268d9!important;
+}
+
+/* ===== V30 iPad 专项布局 ===== */
+@media (min-width:701px) and (max-width:1366px){
+  .block-container{padding:.55rem .72rem 1.8rem!important;max-width:1180px!important}
+  section[data-testid="stSidebar"]{width:245px!important}
+  section[data-testid="stSidebar"] div[role="radiogroup"] > label{
+    min-height:48px!important;font-size:14px!important;padding:0 12px!important
+  }
+  .terminalbar{grid-template-columns:1fr 1fr!important;gap:7px!important}
+  .terminalcell{min-height:54px!important;padding:8px 10px!important}
+  .terminalcell .v{font-size:14px!important}
+  [data-testid="stMetric"]{padding:8px 10px!important}
+  [data-testid="stMetricValue"]{font-size:1.55rem!important}
+  div[data-testid="stHorizontalBlock"]{gap:.5rem!important}
+  [data-testid="stPlotlyChart"]{max-height:430px!important}
+  .card{padding:10px 12px!important}
+}
+
+/* 今日建议大卡片 */
+.advice-hero{
+  background:#ffffff;
+  border:1px solid #dfe6ef;
+  border-radius:14px;
+  padding:14px 16px;
+  margin:6px 0 12px 0;
+  box-shadow:0 2px 10px rgba(20,40,80,.045);
+}
+.advice-title{font-size:17px;font-weight:800;color:#172033;margin-bottom:4px}
+.advice-sub{font-size:12px;color:#7d8796;margin-bottom:10px}
+.advice-grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:8px;
+}
+.advice-item{
+  border:1px solid #edf0f4;border-radius:10px;padding:9px 10px;background:#fbfcfe;
+}
+.advice-item .name{font-size:12px;color:#7b8494}
+.advice-item .amt{font-size:20px;font-weight:800;color:#172033}
+.advice-item .why{font-size:12px;color:#596579;line-height:1.45;margin-top:3px}
+@media(max-width:700px){
+  .advice-grid{grid-template-columns:1fr!important}
+}
+
 @media(max-width:1100px){
  .block-container{padding:.45rem}
  section[data-testid="stSidebar"]{width:235px!important}
@@ -177,6 +233,19 @@ DEFAULT_PORT=pd.DataFrame([
 ["国泰纳斯达克100",249.79,"纳斯达克100","核心","50/日",0],
 ],columns=["基金","金额","主要暴露","定位","动作","目标金额"])
 
+def cloud_delete_ids(table, ids):
+    if not CLOUD or not ids:
+        return False
+    ok=True
+    for rid in ids:
+        try:
+            CLOUD.table(table).delete().eq("id", int(rid)).execute()
+        except Exception:
+            ok=False
+    return ok
+
+
+
 def load_json(path,default):
     try:
         with open(path,"r",encoding="utf-8") as f:return {**default,**json.load(f)}
@@ -220,6 +289,46 @@ events=load_json(EVENT_FILE,{"events":DEFAULT_EVENTS}).get("events",DEFAULT_EVEN
 PORT=load_port()
 
 
+
+def normalize_holdings_dict(raw):
+    out={}
+    for fund,rows in (raw or {}).items():
+        clean=[]
+        for row in rows or []:
+            try:
+                if isinstance(row,dict):
+                    name=str(row.get("name") or row.get("asset") or "").strip()
+                    weight=float(row.get("weight") or row.get("weight_pct") or 0)
+                else:
+                    name=str(row[0]).strip()
+                    weight=float(row[1])
+                if name:
+                    clean.append((name,weight))
+            except Exception:
+                pass
+        if clean:
+            out[str(fund)]=clean
+    return out
+
+def save_holdings_store(store, asof=None):
+    payload={
+        "asof":asof or datetime.now(TZ).strftime("%Y-%m-%d"),
+        "funds":{k:[{"name":n,"weight":w} for n,w in v] for k,v in store.items()}
+    }
+    with open(HOLDINGS_FILE,"w",encoding="utf-8") as f:
+        json.dump(payload,f,ensure_ascii=False,indent=2)
+
+def load_holdings_store(default_store, default_asof):
+    try:
+        with open(HOLDINGS_FILE,"r",encoding="utf-8") as f:
+            raw=json.load(f)
+        funds=normalize_holdings_dict(raw.get("funds",{}))
+        if funds:
+            return funds, raw.get("asof") or default_asof
+    except Exception:
+        pass
+    return default_store, default_asof
+
 TOP_HOLDINGS={
 "德邦鑫星/CPO":[
 ("中际旭创",9.92),("新易盛",9.81),("东山精密",9.50),("胜宏科技",7.95),("天孚通信",7.93),
@@ -241,6 +350,7 @@ TOP_HOLDINGS={
 ("华虹宏力",4.5),("Corning",4.2),("Nitto Boseki",4.0),("东山精密",3.8),("源杰科技",3.5)]
 }
 HOLDINGS_ASOF="2026Q2"
+TOP_HOLDINGS,HOLDINGS_ASOF=load_holdings_store(TOP_HOLDINGS,HOLDINGS_ASOF)
 
 FUND_MAP={
 "CPO/光通信":["德邦鑫星/CPO","易方达全球成长精选","建信新兴市场"],
@@ -469,13 +579,11 @@ m,sec,news,S=compute()
 
 with st.sidebar:
     st.markdown("## 📊 阮嘤基金")
-    st.caption("V28 · 手机极速版")
+    st.caption("V33 · 底层穿透增强版")
     page=st.radio("功能导航",[
-        "🏠 今日驾驶舱","📈 市场看板","▦ 板块中心","💼 基金中心","📰 新闻中心",
-        "🔥 机会与风险","🧠 决策大脑","📅 事件日历","🔗 重合度分析","🧬 底层穿透",
-        "🎯 仓位目标","🛰 数据健康","💰 资金计划","🩺 组合体检","📒 投资日志",
-        "☁️ 云端同步","🧾 持仓管理","⚙️ 投资规则"
+        "🎯 今日决策","📊 市场研究","💼 组合分析","🧾 交易与资金","⚙️ 管理与设置"
     ],label_visibility="collapsed")
+    st.caption("左侧只保留5个大类，具体功能在页面顶部切换。")
     st.markdown("---")
     st.metric("今日建议",f"¥{S['total']}")
     st.caption(f"纳指{S['nasb']} · 黄金{S['goldb']} · CPO{S['cpob']} · 半导体{S['semib']} · 建信{S['jxb']}")
@@ -599,6 +707,54 @@ def overlap_matrix():
     return pd.DataFrame(mat,index=names,columns=names)
 
 
+
+def weighted_holding_overlap():
+    funds=[f for f in TOP_HOLDINGS if f in PORT["基金"].tolist()]
+    weight_maps={f:{n:float(w) for n,w in TOP_HOLDINGS[f]} for f in funds}
+    mat=[]
+    for a in funds:
+        row=[]
+        for b in funds:
+            names=set(weight_maps[a])|set(weight_maps[b])
+            if not names:
+                row.append(0); continue
+            shared=sum(min(weight_maps[a].get(n,0),weight_maps[b].get(n,0)) for n in names)
+            base=max(1e-9,min(sum(weight_maps[a].values()),sum(weight_maps[b].values())))
+            row.append(round(shared/base*100,1))
+        mat.append(row)
+    return pd.DataFrame(mat,index=funds,columns=funds)
+
+def aggregate_company_exposure():
+    amount_map=dict(zip(PORT["基金"],pd.to_numeric(PORT["金额"],errors="coerce").fillna(0)))
+    total=float(pd.to_numeric(PORT["金额"],errors="coerce").fillna(0).sum())
+    rows=[]
+    for fund,hs in TOP_HOLDINGS.items():
+        famount=float(amount_map.get(fund,0))
+        for stock,w in hs:
+            est=famount*float(w)/100
+            rows.append([stock,fund,float(w),famount,est])
+    raw=pd.DataFrame(rows,columns=["底层资产","基金","基金内权重%","基金金额","估算底层金额"])
+    if raw.empty:
+        return raw,pd.DataFrame()
+    agg=raw.groupby("底层资产",as_index=False).agg(
+        估算底层金额=("估算底层金额","sum"),
+        出现基金数=("基金","nunique")
+    )
+    agg["占组合估算%"]=agg["估算底层金额"]/total*100 if total else 0
+    agg=agg.sort_values(["估算底层金额","出现基金数"],ascending=[False,False])
+    return raw,agg
+
+def exposure_alerts_from_holdings():
+    raw,agg=aggregate_company_exposure()
+    alerts=[]
+    if agg.empty:return alerts
+    for _,r in agg.head(10).iterrows():
+        if r["占组合估算%"]>=5:
+            alerts.append(f"{r['底层资产']} 通过已知重仓股估算约占组合 {r['占组合估算%']:.1f}%")
+        elif r["出现基金数"]>=3:
+            alerts.append(f"{r['底层资产']} 同时出现在 {int(r['出现基金数'])} 只基金的已知重仓中")
+    return alerts[:6]
+
 def true_holding_overlap():
     funds=[f for f in TOP_HOLDINGS if f in PORT["基金"].tolist()]
     sets={f:set(x[0] for x in TOP_HOLDINGS[f]) for f in funds}
@@ -671,29 +827,284 @@ def save_snapshot(port):
     tmp["日期"]=now
     tmp.to_csv(SNAPSHOT_FILE,mode="a",header=not os.path.exists(SNAPSHOT_FILE),index=False,encoding="utf-8-sig")
 
+
+def latest_topic_news(news, topic, limit=2):
+    if news is None or news.empty:
+        return pd.DataFrame()
+    x=news[news["主题"]==topic].copy()
+    if x.empty:
+        return x
+    return x.sort_values(["重要度","发布时间"],ascending=[False,False],na_position="last").head(limit)
+
+def source_lines_for_asset(asset, m, sec, news, S):
+    lines=[]
+    if asset=="纳指":
+        lines.append(f"行情：纳斯达克 {S['nas']:+.2f}%｜VIX {S['vix']:.1f}｜美债10Y {S['tnx']:.2f}（Yahoo Finance）")
+        rel=pd.concat([latest_topic_news(news,"AI/算力",1),latest_topic_news(news,"美股宏观",1)],ignore_index=True)
+    elif asset=="黄金":
+        gold=m[m["市场"]=="黄金"]
+        gp=float(gold.iloc[0]["涨跌"]) if len(gold) and pd.notna(gold.iloc[0]["涨跌"]) else 0
+        lines.append(f"行情：黄金 {gp:+.2f}%｜美债10Y {S['tnx']:.2f}（Yahoo Finance）")
+        rel=latest_topic_news(news,"黄金/宏观",2)
+    elif asset=="CPO":
+        lines.append(f"板块代理：CPO/光通信 {S['cp']:+.2f}%（腾讯核心成分股代理）")
+        rel=latest_topic_news(news,"CPO/光通信",2)
+    elif asset=="半导体":
+        lines.append(f"板块代理：半导体设备 {S['sp']:+.2f}%｜SOX {S['sox']:+.2f}%（腾讯/Yahoo）")
+        rel=latest_topic_news(news,"半导体设备",2)
+    else:
+        lines.append(f"环境：纳指 {S['nas']:+.2f}%｜VIX {S['vix']:.1f}｜美债10Y {S['tnx']:.2f}")
+        rel=pd.concat([latest_topic_news(news,"AI/算力",1),latest_topic_news(news,"HBM/存储",1)],ignore_index=True)
+
+    links=[]
+    if rel is not None and not rel.empty:
+        for _,r in rel.iterrows():
+            links.append((r["新闻"],r["链接"],r["可信度"],int(r["重要度"])))
+    return lines,links
+
+def build_today_advice(m, sec, news, S):
+    # 规则层：保留用户固定核心节奏，只允许“机会档”在回撤+风险可控时提升。
+    items=[]
+    items.append(("纳指",S["nasb"],
+                  "基础定投继续；仅在明显回撤且VIX/美债没有同步恶化时提高到机会档。"))
+    items.append(("黄金",S["goldb"],
+                  "继续作为防守仓；不因为单日上涨追高，也不因科技反弹取消基础配置。"))
+    items.append(("CPO",S["cpob"],
+                  "回撤时分批，不追涨。若出现高可信出口限制/政策利空，动态仓优先收缩。"))
+    items.append(("半导体",S["semib"],
+                  "基础仓保持；明显回撤时小幅提高，避免与CPO/海外半导体同时重仓叠加。"))
+    items.append(("建信",S["jxb"],
+                  "动态仓。美债偏高或政策风险触发时降到0；回撤且AI/HBM逻辑未坏时再提高。"))
+    return items
+
+def render_today_advice(m, sec, news, S):
+    st.markdown("## 🎯 今日操作建议")
+    items=build_today_advice(m,sec,news,S)
+    html=['<div class="advice-hero"><div class="advice-title">今日执行方案</div>',
+          '<div class="advice-sub">建议由实时行情、板块代理涨跌、风险指标和高可信新闻共同决定；默认不因为单条新闻改变长期核心定投。</div>',
+          '<div class="advice-grid">']
+    for name,amt,why in items:
+        html.append(f'<div class="advice-item"><div class="name">{name}</div><div class="amt">¥{amt}</div><div class="why">{why}</div></div>')
+    html.append('</div></div>')
+    st.markdown("".join(html),unsafe_allow_html=True)
+
+    with st.expander("📚 展开：今天为什么这样操作（含来源）",expanded=True):
+        for name,amt,why in items:
+            st.markdown(f"**{name}｜建议 ¥{amt}**")
+            st.caption(why)
+            lines,links=source_lines_for_asset(name,m,sec,news,S)
+            for line in lines:
+                st.caption("• "+line)
+            for j,(title,url,grade,importance) in enumerate(links):
+                c1,c2=st.columns([5,1])
+                with c1:
+                    st.caption(f"• 新闻：{title}｜可信度 {grade}｜重要度 {'★'*importance}")
+                with c2:
+                    if url:
+                        st.link_button("来源 ↗",url,key=f"advice_src_{name}_{j}")
+            st.markdown("---")
+
+
+
+# ===== V32 持仓驱动决策层 =====
+def safe_num(x,default=0.0):
+    try:
+        if pd.isna(x): return default
+        return float(x)
+    except Exception:
+        return default
+
+def portfolio_total():
+    try:return float(PORT["金额"].fillna(0).sum())
+    except Exception:return 0.0
+
+def portfolio_weights():
+    p=PORT.copy()
+    p["金额"]=pd.to_numeric(p["金额"],errors="coerce").fillna(0)
+    total=max(p["金额"].sum(),1)
+    p["权重"]=p["金额"]/total
+    return p.sort_values("权重",ascending=False)
+
+def news_for_fund(fund,news,limit=3):
+    if news is None or news.empty:return pd.DataFrame()
+    mask=news["影响基金"].fillna("").str.contains(re.escape(str(fund)),regex=True)
+    return news[mask].sort_values(["重要度","发布时间"],ascending=[False,False],na_position="last").head(limit)
+
+def confidence_for_asset(name,S,news):
+    # 不是“预测准确率”，而是“当前证据一致性”：数据越齐、方向越一致，分数越高。
+    score=55
+    if name=="纳指":
+        score += 8 if S["nas"]<0 else 2
+        score += 6 if S["vix"]<25 else -8
+        score += 5 if S["tnx"]<4.6 else -7
+        topics=["AI/算力","美股宏观"]
+    elif name=="黄金":
+        score += 6 if S["vix"]>=20 else 2
+        score += 4 if S["tnx"]<4.6 else -2
+        topics=["黄金/宏观"]
+    elif name=="CPO":
+        score += 8 if S["cp"]<0 else 1
+        score += -12 if S["policy_bad"] else 5
+        topics=["CPO/光通信"]
+    elif name=="半导体":
+        score += 7 if S["sp"]<0 else 1
+        score += 4 if S["sox"]>=-2 else -5
+        topics=["半导体设备"]
+    else:
+        score += 5 if S["nas"]<0 and S["vix"]<30 else 0
+        score += -8 if S["tnx"]>4.7 else 3
+        topics=["AI/算力","HBM/存储"]
+
+    if news is not None and not news.empty:
+        rel=news[news["主题"].isin(topics)]
+        if len(rel):
+            hi=rel[rel["可信度"]=="A"]
+            score += min(8,len(hi)*2)
+    return max(30,min(90,int(score)))
+
+def action_condition(name,amount,S):
+    if name=="纳指":
+        return "若纳指继续明显回撤、VIX未失控且美债收益率不继续快速上冲，可临时提高；若VIX>30则不机械加倍。"
+    if name=="黄金":
+        return "基础防守仓保持；若金价急涨不追高，若实际利率/美债收益率明显上行则只保留基础档。"
+    if name=="CPO":
+        return "只有“板块回撤 + AI资本开支逻辑未坏 + 无新增高可信政策利空”同时满足，才提高动态仓。"
+    if name=="半导体":
+        return "回撤时小幅提高；若CPO和海外半导体已同时加仓，则这里避免继续叠加高相关风险。"
+    return "只有AI/HBM链条回撤而基本面新闻未恶化时提高；美债偏高、政策风险或高波动时降至0。"
+
+def build_decision_table(m,sec,news,S):
+    base={"纳指":50,"黄金":50,"CPO":20,"半导体":10,"建信":0}
+    cur={"纳指":S["nasb"],"黄金":S["goldb"],"CPO":S["cpob"],"半导体":S["semib"],"建信":S["jxb"]}
+    rows=[]
+    for name in ["纳指","黄金","CPO","半导体","建信"]:
+        diff=cur[name]-base[name]
+        if diff>0: change=f"↑ +¥{diff}"
+        elif diff<0: change=f"↓ ¥{diff}"
+        else: change="＝ 基础档"
+        rows.append([name,base[name],cur[name],change,confidence_for_asset(name,S,news),action_condition(name,cur[name],S)])
+    return pd.DataFrame(rows,columns=["方向","基础金额","今日建议","相对基础","证据一致性","改变条件"])
+
+def portfolio_alerts(S,news):
+    alerts=[]
+    pw=portfolio_weights()
+    total=portfolio_total()
+    if total:
+        top=pw.iloc[0]
+        if top["权重"]>=0.30:
+            alerts.append(("🔴","单基金集中",f"{top['基金']} 占组合 {top['权重']:.1%}，单基金集中度偏高。"))
+    if S["vix"]>=30: alerts.append(("🔴","高波动",f"VIX {S['vix']:.1f}，不建议机械抄底。"))
+    elif S["vix"]>=22: alerts.append(("🟠","波动升温",f"VIX {S['vix']:.1f}，动态仓需要更谨慎。"))
+    if S["tnx"]>=4.7: alerts.append(("🟠","估值压力",f"美债10Y {S['tnx']:.2f}，对高估值科技资产不友好。"))
+    if S["policy_bad"]: alerts.append(("🔴","政策风险","新闻中检测到出口限制/制裁相关高风险关键词，CPO和海外科技动态仓收缩。"))
+    if S["cp"]<=-3: alerts.append(("🟡","CPO大幅回撤",f"CPO核心成分代理 {S['cp']:+.2f}%，先判断是情绪回撤还是逻辑变化。"))
+    if not alerts: alerts.append(("🟢","暂无重大异常","当前没有触发工作台的主要风险阈值，按基础计划执行即可。"))
+    return alerts
+
+def render_v32_decision_core(m,sec,news,S):
+    st.markdown("## 🧠 今日决策核心")
+    total=portfolio_total()
+    a,b,c,d=st.columns(4)
+    a.metric("今日计划",f"¥{S['total']}")
+    b.metric("组合金额",f"¥{total:,.0f}")
+    bconf=int(build_decision_table(m,sec,news,S)["证据一致性"].mean())
+    c.metric("证据一致性",f"{bconf}/100")
+    d.metric("风险温度",f"{S['risk']}/100")
+
+    dt=build_decision_table(m,sec,news,S)
+    st.dataframe(
+        dt[["方向","基础金额","今日建议","相对基础","证据一致性"]],
+        hide_index=True,use_container_width=True
+    )
+    with st.expander("为什么这样操作 / 什么情况下改变",expanded=True):
+        for _,r in dt.iterrows():
+            st.markdown(f"**{r['方向']}｜¥{int(r['今日建议'])}｜证据一致性 {int(r['证据一致性'])}/100**")
+            st.caption(r["改变条件"])
+
+def render_alert_center(S,news):
+    st.markdown("### 🚨 今日异常")
+    for icon,title,detail in portfolio_alerts(S,news):
+        st.markdown(f"**{icon} {title}**")
+        st.caption(detail)
+
+def render_personal_news(news,limit=10):
+    st.markdown("### 🧷 与我的持仓直接相关")
+    if news is None or news.empty:
+        st.caption("暂无新闻数据")
+        return
+    x=news[news["影响基金"].fillna("")!="无直接核心基金映射"].head(limit)
+    if x.empty:
+        st.caption("当前没有识别到直接关联持仓的新闻。")
+        return
+    for i,(_,r) in enumerate(x.iterrows()):
+        with st.container(border=True):
+            st.markdown(f"**{r['主题']}｜{'★'*int(r['重要度'])}｜可信度 {r['可信度']}**")
+            st.write(r["新闻"])
+            st.caption(f"影响：{r['影响基金']}")
+            st.caption(r["摘要"])
+            if r["链接"]:
+                st.link_button("查看来源 ↗",r["链接"],key=f"personal_news_{i}")
+
+CATEGORY_PAGES={
+    "🎯 今日决策":["🎯 今日建议","🏠 今日驾驶舱","🔥 机会与风险","🧠 决策大脑","📅 事件日历"],
+    "📊 市场研究":["📈 市场看板","▦ 板块中心","📰 新闻中心"],
+    "💼 组合分析":["💼 基金中心","🔗 重合度分析","🧬 底层穿透","🧾 持仓穿透管理","🎯 仓位目标","🩺 组合体检"],
+    "🧾 交易与资金":["📒 投资日志","💰 资金计划","🧾 持仓管理"],
+    "⚙️ 管理与设置":["☁️ 云端同步","🛰 数据健康","⚙️ 投资规则"],
+}
+
+def choose_subpage(category):
+    pages=CATEGORY_PAGES[category]
+    return st.radio(
+        "二级导航",
+        pages,
+        horizontal=True,
+        label_visibility="collapsed",
+        key=f"subnav_{category}"
+    )
+
 @st.fragment(run_every="180s")
 def render(page):
-
-
+    category=page
+    page=choose_subpage(category)
     m,sec,news,S=compute()
     now=datetime.now(TZ)
+    st.caption(f"{category}  ›  {page}")
     st.markdown(f"# {page}")
     top_terminal(S,news)
     st.caption(f"数据每60秒自动刷新 ｜ 最近刷新：{now.strftime('%Y-%m-%d %H:%M:%S')}（北京时间）")
 
-    if page=="🏠 今日驾驶舱":
+    if page=="🎯 今日建议":
+        render_v32_decision_core(m,sec,news,S)
+        render_alert_center(S,news)
+        render_today_advice(m,sec,news,S)
+        st.subheader("今日关键风险")
+        risk_rows=pd.DataFrame([
+            ["美债10Y",S["tnx"],"高于4.6时压制科技估值，动态仓降低"],
+            ["VIX",S["vix"],"高于30时避免把大跌机械当便宜"],
+            ["纳指单日",S["nas"],"明显回撤才考虑机会档"],
+            ["CPO代理",S["cp"],"回撤+无重大政策利空时才提高"],
+            ["政策风险","触发" if S["policy_bad"] else "未触发","触发时CPO/建信动态仓收缩"]
+        ],columns=["观察项","当前","解释"])
+        st.dataframe(risk_rows,hide_index=True,use_container_width=True)
+        st.subheader("今日不要做")
+        st.warning("不追涨；不因为一条低可信新闻改变长期配置；不同时把CPO、半导体、海外AI三条高相关风险链一起打到机会档。")
+
+    elif page=="🏠 今日驾驶舱":
+        render_alert_center(S,news)
+        render_today_advice(m,sec,news,S)
         st.info(f"今日执行：固定核心继续定投；动态仓根据风险调整。当前建议合计 ¥{S['total']}。")
         A,B=st.columns([1,1.4])
         with A:
             fig=go.Figure(go.Indicator(mode="gauge+number",value=S["risk"],title={"text":"市场风险温度"},gauge={"axis":{"range":[0,100]},"bar":{"thickness":.22},"steps":[{"range":[0,45]},{"range":[45,70]},{"range":[70,100]}]}))
-            fig.update_layout(height=220,margin=dict(l=10,r=10,t=40,b=5))
+            fig.update_layout(height=185,margin=dict(l=5,r=5,t=34,b=2))
             st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
             x,y,z=st.columns(3);x.metric("VIX",f"{S['vix']:.1f}");y.metric("美债10Y",f"{S['tnx']:.2f}");z.metric("SOX",f"{S['sox']:+.2f}%")
             st.subheader("今天不要做什么")
             st.warning("不追涨单日大涨板块；不在高可信基本面利空下机械抄底；不动用未来定投资金凑满仓。")
         with B:
             st.subheader("📰 今日重点新闻")
-            render_news_cards(news.head(8) if not news.empty else news,8,"home")
+            render_news_cards(news.head(5) if not news.empty else news,5,"home")
         st.subheader("🧭 新闻影响速览")
         nit=news_impact_table(news)
         if not nit.empty:
@@ -759,11 +1170,16 @@ def render(page):
         else: st.info("按当前定位执行。")
         keys=r["主要暴露"].replace("海外","").split("/")
         rel=news[news["主题"].apply(lambda x:any(k and k.lower() in x.lower() for k in keys))] if not news.empty else pd.DataFrame()
+        if chosen in TOP_HOLDINGS:
+            st.subheader(f"已知重仓股 · {HOLDINGS_ASOF}")
+            hh=pd.DataFrame(TOP_HOLDINGS[chosen],columns=["重仓资产","权重%"])
+            st.dataframe(hh,hide_index=True,use_container_width=True,height=280)
         st.subheader("相关新闻")
         render_news_cards(rel,20,"fund")
 
     elif page=="📰 新闻中心":
         news=getnews("full")
+        render_personal_news(news,10)
         if news.empty:
             st.warning("新闻源暂不可用")
         else:
@@ -853,7 +1269,7 @@ def render(page):
         ],columns=["事件","主要影响","规则"]),hide_index=True,use_container_width=True)
 
     elif page=="🔗 重合度分析":
-        tab1,tab2=st.tabs(["真实重仓股重合","风险暴露相似度"])
+        tab1,tab2,tab3=st.tabs(["重仓股交集","权重重合度","风险暴露相似度"])
         with tab1:
             st.subheader(f"重仓股交集矩阵 · 数据截至 {HOLDINGS_ASOF}")
             mat=true_holding_overlap()
@@ -865,6 +1281,16 @@ def render(page):
                 st.plotly_chart(fig,use_container_width=True)
                 st.info("这里按已知Top10重仓股名称交集计算，是真实持仓快照层面的重合，不代表全部持仓实时重合率。")
         with tab2:
+            st.subheader("按重仓权重计算的重合度")
+            wmat=weighted_holding_overlap()
+            if wmat.empty:
+                st.caption("暂无可计算数据")
+            else:
+                fig=px.imshow(wmat,text_auto=True,aspect="auto",zmin=0,zmax=100)
+                fig.update_layout(height=560)
+                st.plotly_chart(fig,use_container_width=True)
+                st.info("使用已知重仓股权重计算：共同重仓越多、权重越接近，分数越高。比单纯看股票名称交集更有参考价值。")
+        with tab3:
             st.subheader("风险暴露相似度")
             mat=overlap_matrix()
             fig=px.imshow(mat,text_auto=True,aspect="auto",zmin=0,zmax=100)
@@ -875,7 +1301,21 @@ def render(page):
         st.write("多只科技基金底层仍高度集中在AI硬件、半导体、存储与光通信链条；黄金承担主要低相关防守作用。")
 
     elif page=="🧬 底层穿透":
-        st.subheader(f"基金底层持仓穿透 · 已知数据截至 {HOLDINGS_ASOF}")
+        st.subheader(f"基金底层持仓穿透 · 数据截至 {HOLDINGS_ASOF}")
+        raw2,agg2=aggregate_company_exposure()
+        if not agg2.empty:
+            a1,a2,a3,a4=st.columns(4)
+            a1.metric("可穿透基金",len([f for f in TOP_HOLDINGS if f in PORT["基金"].tolist()]))
+            a2.metric("底层资产",agg2["底层资产"].nunique())
+            a3.metric("重复资产",int((agg2["出现基金数"]>=2).sum()))
+            a4.metric("TOP1底层占比",f"{agg2.iloc[0]['占组合估算%']:.1f}%")
+            st.subheader("组合底层公司暴露 TOP20")
+            st.dataframe(agg2.head(20),hide_index=True,use_container_width=True)
+            alerts=exposure_alerts_from_holdings()
+            if alerts:
+                st.subheader("重复/集中提醒")
+                for t in alerts:
+                    st.warning(t)
         raw,agg=aggregate_underlying()
         if agg.empty:
             st.caption("暂无可穿透数据")
@@ -898,6 +1338,71 @@ def render(page):
         chosen=st.selectbox("查看单只基金Top10",list(TOP_HOLDINGS.keys()))
         h=pd.DataFrame(TOP_HOLDINGS[chosen],columns=["重仓资产","权重%"])
         st.dataframe(h,hide_index=True,use_container_width=True)
+
+    elif page=="🧾 持仓穿透管理":
+        st.subheader("基金底层持仓管理")
+        st.caption("这里维护基金最新季报/披露的重仓股。更新后，重合度、底层穿透和集中度会自动使用新数据。")
+        st.info(f"当前数据日期：{HOLDINGS_ASOF}")
+
+        chosen=st.selectbox("选择基金",sorted(TOP_HOLDINGS.keys()),key="holdings_mgr_fund")
+        cur=pd.DataFrame(TOP_HOLDINGS.get(chosen,[]),columns=["重仓资产","权重%"])
+        edited=st.data_editor(cur,hide_index=True,use_container_width=True,num_rows="dynamic",key="holdings_editor")
+
+        c1,c2=st.columns([1,1])
+        with c1:
+            asof=st.text_input("数据日期/季度",value=str(HOLDINGS_ASOF),placeholder="例如 2026Q3")
+        with c2:
+            st.metric("当前Top权重合计",f"{pd.to_numeric(edited['权重%'],errors='coerce').fillna(0).sum():.1f}%")
+
+        if st.button("保存这只基金的底层持仓",use_container_width=True):
+            clean=[]
+            for _,r in edited.iterrows():
+                name=str(r.get("重仓资产","")).strip()
+                try:w=float(r.get("权重%",0))
+                except:w=0
+                if name and w>0:
+                    clean.append((name,w))
+            store=dict(TOP_HOLDINGS)
+            store[chosen]=clean
+            save_holdings_store(store,asof)
+            st.success("已保存。重新刷新后，穿透/重合度会使用新数据。")
+
+        st.markdown("---")
+        st.subheader("批量导入 / 导出")
+        template_rows=[]
+        for fund,hs in TOP_HOLDINGS.items():
+            for name,w in hs:
+                template_rows.append([fund,name,w,HOLDINGS_ASOF])
+        export_df=pd.DataFrame(template_rows,columns=["基金","重仓资产","权重%","数据日期"])
+        st.download_button(
+            "下载当前底层持仓 CSV",
+            export_df.to_csv(index=False).encode("utf-8-sig"),
+            "fund_holdings.csv","text/csv",use_container_width=True
+        )
+        uploaded=st.file_uploader("上传底层持仓CSV",type=["csv"],key="holdings_csv_upload")
+        if uploaded is not None:
+            try:
+                up=pd.read_csv(uploaded)
+                st.dataframe(up.head(30),hide_index=True,use_container_width=True)
+                required={"基金","重仓资产","权重%"}
+                if required.issubset(set(up.columns)):
+                    if st.button("确认导入底层持仓",use_container_width=True):
+                        store={}
+                        for fund,g in up.groupby("基金"):
+                            rows=[]
+                            for _,r in g.iterrows():
+                                try:w=float(r["权重%"])
+                                except:w=0
+                                name=str(r["重仓资产"]).strip()
+                                if name and w>0: rows.append((name,w))
+                            if rows: store[str(fund)]=rows
+                        d=str(up["数据日期"].dropna().iloc[0]) if "数据日期" in up.columns and len(up["数据日期"].dropna()) else datetime.now(TZ).strftime("%Y-%m-%d")
+                        save_holdings_store(store,d)
+                        st.success("导入成功，刷新页面后生效。")
+                else:
+                    st.error("CSV至少需要：基金、重仓资产、权重% 三列。")
+            except Exception as e:
+                st.error(f"读取CSV失败：{e}")
 
     elif page=="🎯 仓位目标":
         st.subheader("当前组合风险桶")
@@ -922,6 +1427,10 @@ def render(page):
             st.info("当前科技成长暴露尚未触发本页70%的高集中提醒。")
 
     elif page=="🛰 数据健康":
+        hist_file=os.path.join(DATA_DIR,"decision_history.jsonl")
+        if os.path.exists(hist_file):
+            with open(hist_file,"rb") as f:
+                st.download_button("下载决策历史 JSONL",f.read(),"decision_history.jsonl","application/json",use_container_width=True)
         st.subheader("数据源健康检查")
         health=data_health_table(m,sec,news)
         st.dataframe(health,hide_index=True,use_container_width=True)
@@ -959,6 +1468,12 @@ def render(page):
             st.dataframe(al[["去向","金额"]],hide_index=True,use_container_width=True)
 
     elif page=="🩺 组合体检":
+        st.subheader("真实持仓权重")
+        pw=portfolio_weights()
+        pshow=pw[["基金","金额","定位","主要暴露","权重"]].copy()
+        pshow["权重"]=pshow["权重"].map(lambda x:f"{x:.1%}")
+        st.dataframe(pshow,hide_index=True,use_container_width=True)
+        render_alert_center(S,news)
         exp=portfolio_exposure_view()
         total=float(PORT["金额"].sum())
         gold=float(PORT.loc[PORT["基金"]=="华安黄金ETF联接C","金额"].sum())
@@ -979,45 +1494,193 @@ def render(page):
         st.dataframe(PORT,hide_index=True,use_container_width=True)
 
     elif page=="📒 投资日志":
-        actual={}
-        for k,dft in [("纳指",S["nasb"]),("黄金",S["goldb"]),("CPO",S["cpob"]),("半导体",S["semib"]),("建信",S["jxb"])]:
-            actual[k]=st.number_input(k,min_value=0,value=int(dft),step=10,key="log"+k)
-        if st.button("保存今日投资记录"):
-            rec={"日期":datetime.now(TZ).strftime("%Y-%m-%d %H:%M"),"市场状态":S["state"],"建议总额":S["total"],
-                 **{f"建议_{k}":v for k,v in {"纳指":S["nasb"],"黄金":S["goldb"],"CPO":S["cpob"],"半导体":S["semib"],"建信":S["jxb"]}.items()},
-                 **{f"实际_{k}":v for k,v in actual.items()}}
-            duplicate=False
-            if os.path.exists(LOG_FILE):
-                try:
-                    oldlog=pd.read_csv(LOG_FILE)
-                    if len(oldlog):
-                        last=oldlog.iloc[-1]
-                        same_day=str(last.get("日期",""))[:10]==rec["日期"][:10]
-                        same_actual=all(float(last.get(f"实际_{k}",-1))==float(v) for k,v in actual.items())
-                        # 同一天、同一组实际金额，视为重复点击，不再次写入。
-                        duplicate=same_day and same_actual
-                except Exception:
-                    duplicate=False
-            if duplicate:
-                st.warning("检测到今天已有相同投资记录，本次未重复保存。")
+        st.subheader("今日基金交易记录")
+        st.caption("每只基金都可以单独加仓、减仓或不操作；保存后会自动更新持仓。")
+
+        tx_rows=[]
+        for i,(_,pr) in enumerate(PORT.iterrows()):
+            fund=str(pr["基金"])
+            current=float(pr["金额"]) if pd.notna(pr["金额"]) else 0.0
+            with st.container(border=True):
+                c1,c2,c3=st.columns([1.7,1,1])
+                with c1:
+                    st.markdown(f"**{fund}**")
+                    st.caption(f"当前持仓：¥{current:,.2f} ｜ {pr['定位']}")
+                with c2:
+                    action=st.selectbox("操作",["不操作","加仓","减仓"],key=f"tx_action_{i}",label_visibility="collapsed")
+                with c3:
+                    amount=st.number_input("金额",min_value=0.0,value=0.0,step=10.0,key=f"tx_amount_{i}",label_visibility="collapsed")
+                note=st.text_input("备注",placeholder="例如：回撤加仓 / 止盈 / 调仓 / 今天不动",key=f"tx_note_{i}")
+
+                delta=0.0
+                if action=="加仓":
+                    delta=float(amount)
+                elif action=="减仓":
+                    delta=-float(amount)
+
+                new_amount=max(0.0,current+delta)
+                if action!="不操作" and amount>0:
+                    st.caption(f"保存后持仓：¥{new_amount:,.2f}")
+                    tx_rows.append({
+                        "基金":fund,"操作":action,"金额":float(amount),"变动":delta,
+                        "原持仓":current,"新持仓":new_amount,"备注":note
+                    })
+
+        common_note=st.text_area("今日总备注",placeholder="可选：记录今天整体判断。",key="today_common_note")
+
+        if st.button("💾 保存今日投资记录",use_container_width=True):
+            if not tx_rows:
+                st.warning("今天还没有填写任何加仓或减仓。")
             else:
-                pd.DataFrame([rec]).to_csv(LOG_FILE,mode="a",header=not os.path.exists(LOG_FILE),index=False,encoding="utf-8-sig")
+                now_dt=datetime.now(TZ)
+                batch_id=now_dt.strftime("%Y%m%d%H%M%S")
+                new_port=PORT.copy()
+
+                for tx in tx_rows:
+                    idxs=new_port.index[new_port["基金"]==tx["基金"]]
+                    if len(idxs):
+                        new_port.loc[idxs[0],"金额"]=tx["新持仓"]
+
+                save_port(new_port)
+
+                local_rows=[]
+                for tx in tx_rows:
+                    local_rows.append({
+                        "记录ID":f"{batch_id}-{tx['基金']}",
+                        "日期":now_dt.strftime("%Y-%m-%d %H:%M"),
+                        "基金":tx["基金"],
+                        "操作":tx["操作"],
+                        "交易金额":tx["金额"],
+                        "持仓变动":tx["变动"],
+                        "交易前持仓":tx["原持仓"],
+                        "交易后持仓":tx["新持仓"],
+                        "备注":tx["备注"],
+                        "今日总备注":common_note,
+                        "市场状态":S["state"]
+                    })
+
+                tx_file=os.path.join(DATA_DIR,"fund_transactions.csv")
+                pd.DataFrame(local_rows).to_csv(
+                    tx_file,mode="a",header=not os.path.exists(tx_file),
+                    index=False,encoding="utf-8-sig"
+                )
+
                 if CLOUD:
-                    suggested={"纳指":S["nasb"],"黄金":S["goldb"],"CPO":S["cpob"],"半导体":S["semib"],"建信":S["jxb"]}
-                    cloud_insert("investment_logs",[{"log_date":datetime.now(TZ).strftime("%Y-%m-%d"),"fund_name":k,"suggested_amount":float(suggested[k]),"actual_amount":float(v),"note":S["state"]} for k,v in actual.items()])
-                st.success("已保存；云端连接正常时会自动同步")
-        if os.path.exists(LOG_FILE):
-            lg=pd.read_csv(LOG_FILE)
-            st.dataframe(lg.tail(30),hide_index=True,use_container_width=True)
-            if "建议总额" in lg.columns:
-                c1,c2,c3=st.columns(3)
-                c1.metric("累计建议投入",f"¥{lg['建议总额'].sum():,.0f}")
-                c2.metric("记录次数",len(lg))
-                actual_cols=[c for c in lg.columns if c.startswith("实际_")]
-                if actual_cols:
-                    c3.metric("累计实际投入",f"¥{lg[actual_cols].sum().sum():,.0f}")
-            st.download_button("下载投资日志 CSV",lg.to_csv(index=False).encode("utf-8-sig"),"investment_log.csv","text/csv")
-        else: st.caption("保存第一条记录后开始形成历史。")
+                    cloud_rows=[]
+                    for tx in tx_rows:
+                        cloud_rows.append({
+                            "log_date":now_dt.strftime("%Y-%m-%d"),
+                            "fund_name":tx["基金"],
+                            "suggested_amount":0,
+                            "actual_amount":tx["变动"],
+                            "note":f"{tx['操作']} ¥{tx['金额']:.2f}｜{tx['备注']}｜{common_note}".strip("｜")
+                        })
+                    cloud_insert("investment_logs",cloud_rows)
+                    cloud_insert("portfolio_snapshots",[
+                        {"snapshot_time":now_dt.isoformat(),"fund_name":str(r["基金"]),"amount":float(r["金额"])}
+                        for _,r in new_port.iterrows()
+                    ])
+
+                # 同时保存“当时为什么这么做”，供未来5/10/20日复盘
+                try:
+                    decision_file=os.path.join(DATA_DIR,"decision_history.jsonl")
+                    snap={
+                        "time":now_dt.isoformat(),
+                        "market_state":S["state"],
+                        "risk":S["risk"],
+                        "vix":S["vix"],
+                        "us10y":S["tnx"],
+                        "nasdaq_change":S["nas"],
+                        "cpo_proxy":S["cp"],
+                        "semi_proxy":S["sp"],
+                        "plan_total":S["total"],
+                        "trades":tx_rows
+                    }
+                    with open(decision_file,"a",encoding="utf-8") as f:
+                        f.write(json.dumps(snap,ensure_ascii=False)+"\n")
+                except Exception:
+                    pass
+                st.success(f"已保存 {len(tx_rows)} 笔交易，并自动更新持仓；同时保存了当时的决策环境。")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("历史投资记录")
+
+        tx_file=os.path.join(DATA_DIR,"fund_transactions.csv")
+        local_tx=pd.DataFrame()
+        if os.path.exists(tx_file):
+            try:
+                local_tx=pd.read_csv(tx_file)
+            except Exception:
+                local_tx=pd.DataFrame()
+
+        cloud_tx=pd.DataFrame()
+        if CLOUD:
+            try:
+                cr=cloud_select("investment_logs")
+                if cr:
+                    cloud_tx=pd.DataFrame(cr)
+            except Exception:
+                pass
+
+        tab1,tab2=st.tabs(["新版逐基金记录","云端历史记录"])
+
+        with tab1:
+            if local_tx.empty:
+                st.caption("还没有新版逐基金交易记录。")
+            else:
+                show=local_tx.iloc[::-1].reset_index(drop=True)
+                st.dataframe(show,hide_index=True,use_container_width=True,height=360)
+
+                st.subheader("删除记录")
+                options=[]
+                for idx,row in show.iterrows():
+                    label=f"{idx+1}. {row.get('日期','')}｜{row.get('基金','')}｜{row.get('操作','')} ¥{row.get('交易金额',0)}｜{row.get('备注','')}"
+                    options.append((label,str(row.get("记录ID",""))))
+
+                selected=st.multiselect("选择要删除的记录",[x[0] for x in options],placeholder="可一次选择多条")
+                if st.button("🗑️ 删除选中记录",type="secondary",use_container_width=True):
+                    if not selected:
+                        st.warning("请先选择要删除的记录。")
+                    else:
+                        ids={rid for label,rid in options if label in selected}
+                        remain=local_tx[~local_tx["记录ID"].astype(str).isin(ids)].copy()
+                        remain.to_csv(tx_file,index=False,encoding="utf-8-sig")
+                        st.success(f"已删除 {len(ids)} 条记录。")
+                        st.rerun()
+
+                st.download_button(
+                    "下载逐基金交易记录 CSV",
+                    local_tx.to_csv(index=False).encode("utf-8-sig"),
+                    "fund_transactions.csv","text/csv",
+                    use_container_width=True
+                )
+
+        with tab2:
+            if cloud_tx.empty:
+                st.caption("暂无云端历史记录，或当前没有读取权限。")
+            else:
+                rename_map={
+                    "id":"ID","log_date":"日期","fund_name":"基金",
+                    "suggested_amount":"建议金额","actual_amount":"实际变动",
+                    "note":"备注","created_at":"创建时间"
+                }
+                cshow=cloud_tx.rename(columns=rename_map)
+                cols=[c for c in ["ID","日期","基金","实际变动","备注","创建时间"] if c in cshow.columns]
+                st.dataframe(cshow[cols].sort_values("ID",ascending=False),hide_index=True,use_container_width=True,height=360)
+
+                if "ID" in cshow.columns:
+                    delete_ids=st.multiselect("选择要从云端删除的记录 ID",cshow["ID"].astype(int).tolist(),key="cloud_delete_ids")
+                    if st.button("🗑️ 删除云端选中记录",use_container_width=True):
+                        if not delete_ids:
+                            st.warning("请先选择记录 ID。")
+                        elif cloud_delete_ids("investment_logs",delete_ids):
+                            st.success("已删除选中的云端记录。")
+                            st.rerun()
+                        else:
+                            st.error("云端删除失败，可能是 RLS 权限限制。")
+
+        st.info("删除历史记录不会自动撤销已经发生的持仓变化；如果交易填错，请同时到“持仓管理”修正当前持仓。")
 
     elif page=="☁️ 云端同步":
         st.subheader("云端同步状态")
