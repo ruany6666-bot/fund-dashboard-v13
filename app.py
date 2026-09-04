@@ -10,7 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client
 
-st.set_page_config(page_title="阮嘤基金投资工作台 V33", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="阮嘤基金投资工作台 V34", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 HEADERS={"User-Agent":"Mozilla/5.0"}
 TZ=ZoneInfo("Asia/Shanghai")
@@ -186,6 +186,7 @@ div[role="radiogroup"][aria-label="二级导航"] > label:has(input:checked){
 """, unsafe_allow_html=True)
 
 
+@st.cache_resource
 def get_cloud():
     try:
         url=st.secrets["SUPABASE_URL"]
@@ -217,6 +218,55 @@ def cloud_insert(table,rows):
     try:CLOUD.table(table).insert(rows).execute();return True
     except Exception:return False
 
+
+def cloud_table_exists(table):
+    if not CLOUD:return False
+    try:
+        CLOUD.table(table).select("*").limit(1).execute()
+        return True
+    except Exception:
+        return False
+
+@st.cache_data(ttl=120)
+def cloud_kv_get(key):
+    if not CLOUD:return None
+    try:
+        rows=CLOUD.table("dashboard_kv").select("value").eq("key",key).limit(1).execute().data or []
+        return rows[0]["value"] if rows else None
+    except Exception:
+        return None
+
+def cloud_kv_set(key,value):
+    if not CLOUD:return False
+    try:
+        CLOUD.table("dashboard_kv").upsert(
+            {"key":key,"value":value,"updated_at":datetime.now(TZ).isoformat()},
+            on_conflict="key"
+        ).execute()
+        cloud_kv_get.clear()
+        return True
+    except Exception:
+        return False
+
+def cloud_decision_insert(payload):
+    if not CLOUD:return False
+    try:
+        CLOUD.table("decision_history").insert({
+            "created_at":payload.get("time"),
+            "market_state":payload.get("market_state"),
+            "risk":payload.get("risk"),
+            "vix":payload.get("vix"),
+            "us10y":payload.get("us10y"),
+            "nasdaq_change":payload.get("nasdaq_change"),
+            "cpo_proxy":payload.get("cpo_proxy"),
+            "semi_proxy":payload.get("semi_proxy"),
+            "plan_total":payload.get("plan_total"),
+            "payload":payload
+        }).execute()
+        return True
+    except Exception:
+        return False
+
 DEFAULT_RULES={"纳指基础":50,"纳指机会":100,"CPO基础":20,"CPO机会":40,"半导体基础":10,"半导体机会":20,"黄金基础":50,"建信中档":50,"建信机会":100}
 DEFAULT_PORT=pd.DataFrame([
 ["易方达全球成长精选",3626.13,"海外科技/半导体","保留","不新增",0],
@@ -246,12 +296,32 @@ def cloud_delete_ids(table, ids):
 
 
 
+def _setting_key_from_path(path):
+    name=os.path.basename(path)
+    return {
+        "rules.json":"rules",
+        "budget.json":"budget",
+        "event_calendar.json":"events"
+    }.get(name)
+
 def load_json(path,default):
+    key=_setting_key_from_path(path)
+    if key:
+        cloud_value=cloud_kv_get(key)
+        if isinstance(cloud_value,dict):
+            return {**default,**cloud_value}
     try:
-        with open(path,"r",encoding="utf-8") as f:return {**default,**json.load(f)}
-    except:return default.copy()
+        with open(path,"r",encoding="utf-8") as f:
+            return {**default,**json.load(f)}
+    except:
+        return default.copy()
+
 def save_json(path,obj):
-    with open(path,"w",encoding="utf-8") as f:json.dump(obj,f,ensure_ascii=False,indent=2)
+    with open(path,"w",encoding="utf-8") as f:
+        json.dump(obj,f,ensure_ascii=False,indent=2)
+    key=_setting_key_from_path(path)
+    if key:
+        cloud_kv_set(key,obj)
 def load_port():
     if CLOUD:
         rows=cloud_select("portfolio")
@@ -317,8 +387,14 @@ def save_holdings_store(store, asof=None):
     }
     with open(HOLDINGS_FILE,"w",encoding="utf-8") as f:
         json.dump(payload,f,ensure_ascii=False,indent=2)
+    cloud_kv_set("fund_holdings",payload)
 
 def load_holdings_store(default_store, default_asof):
+    cloud_raw=cloud_kv_get("fund_holdings")
+    if isinstance(cloud_raw,dict):
+        funds=normalize_holdings_dict(cloud_raw.get("funds",{}))
+        if funds:
+            return funds, cloud_raw.get("asof") or default_asof
     try:
         with open(HOLDINGS_FILE,"r",encoding="utf-8") as f:
             raw=json.load(f)
@@ -511,10 +587,11 @@ def getnews(mode="lite"):
         "白酒 消费 A股 when:7d","券商 东方财富 中信证券 when:7d"
     ]
     lite_queries=[
-        "NVIDIA AI data center when:3d","1.6T optical module CPO when:7d",
-        "HBM Micron SK Hynix Samsung when:7d","中国 半导体设备 北方华创 中微公司 when:7d",
-        "gold Federal Reserve Treasury yield when:3d","US China semiconductor export control when:7d",
-        "A股 政策 证监会 科技股 when:3d"
+        "NVIDIA AI data center when:3d",
+        "1.6T optical module CPO 中际旭创 新易盛 when:7d",
+        "HBM Micron SK Hynix Samsung when:7d",
+        "gold Federal Reserve Treasury yield when:3d",
+        "US China semiconductor export control A股 科技 when:7d"
     ]
     queries = full_queries if mode=="full" else lite_queries
 
@@ -522,7 +599,7 @@ def getnews(mode="lite"):
         out=[]
         try:
             url=f"https://news.google.com/rss/search?q={quote(q)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
-            r=requests.get(url,headers=HEADERS,timeout=5)
+            r=requests.get(url,headers=HEADERS,timeout=3.5)
             r.raise_for_status()
             feed=feedparser.parse(r.content)
             for e in feed.entries[:8]:
@@ -556,7 +633,18 @@ def getnews(mode="lite"):
     return df
 
 def compute():
-    m=markets();sec=sectors();news=getnews("lite")
+    # V34：行情、板块、核心新闻并行冷启动，减少 Streamlit 休眠唤醒后的等待。
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        fm=ex.submit(markets)
+        fs=ex.submit(sectors)
+        fn=ex.submit(getnews,"lite")
+        try:m=fm.result()
+        except Exception:m=pd.DataFrame(columns=["市场","价格","涨跌"])
+        try:sec=fs.result()
+        except Exception:sec=pd.DataFrame(columns=["板块","涨跌","核心成分"])
+        try:news=fn.result()
+        except Exception:news=pd.DataFrame()
+
     def v(name,field,default=0):
         x=m[m["市场"]==name]
         return float(x.iloc[0][field]) if len(x) and pd.notna(x.iloc[0][field]) else default
@@ -579,7 +667,7 @@ m,sec,news,S=compute()
 
 with st.sidebar:
     st.markdown("## 📊 阮嘤基金")
-    st.caption("V33 · 底层穿透增强版")
+    st.caption("V34 · iPad稳定云端版")
     page=st.radio("功能导航",[
         "🎯 今日决策","📊 市场研究","💼 组合分析","🧾 交易与资金","⚙️ 管理与设置"
     ],label_visibility="collapsed")
@@ -589,9 +677,10 @@ with st.sidebar:
     st.caption(f"纳指{S['nasb']} · 黄金{S['goldb']} · CPO{S['cpob']} · 半导体{S['semib']} · 建信{S['jxb']}")
     if st.button("🔄 立即刷新",use_container_width=True):
         st.cache_data.clear();st.rerun()
-    st.caption("自动刷新：180秒 · 可手动立即刷新")
-    st.caption("新闻库：" + (f"🟢 {len(news)} 条" if not news.empty else "🔴 暂不可用"))
-    st.caption("云端同步：" + ("🟢 已连接" if CLOUD else "🟠 未连接"))
+    with st.expander("连接与刷新状态",expanded=False):
+        st.caption("自动刷新：300秒 · 可手动立即刷新")
+        st.caption("新闻库：" + (f"🟢 {len(news)} 条" if not news.empty else "🔴 暂不可用"))
+        st.caption("云端同步：" + ("🟢 已连接" if CLOUD else "🟠 未连接"))
 
 def render_news_cards(df,limit=20,prefix="n"):
     if df.empty:
@@ -1063,7 +1152,7 @@ def choose_subpage(category):
         key=f"subnav_{category}"
     )
 
-@st.fragment(run_every="180s")
+@st.fragment(run_every="300s")
 def render(page):
     category=page
     page=choose_subpage(category)
@@ -1072,7 +1161,7 @@ def render(page):
     st.caption(f"{category}  ›  {page}")
     st.markdown(f"# {page}")
     top_terminal(S,news)
-    st.caption(f"数据每60秒自动刷新 ｜ 最近刷新：{now.strftime('%Y-%m-%d %H:%M:%S')}（北京时间）")
+    st.caption(f"页面每300秒刷新 ｜ 行情缓存60秒 ｜ 最近刷新：{now.strftime('%Y-%m-%d %H:%M:%S')}（北京时间）")
 
     if page=="🎯 今日建议":
         render_v32_decision_core(m,sec,news,S)
@@ -1431,6 +1520,22 @@ def render(page):
         if os.path.exists(hist_file):
             with open(hist_file,"rb") as f:
                 st.download_button("下载决策历史 JSONL",f.read(),"decision_history.jsonl","application/json",use_container_width=True)
+        st.subheader("稳定性与云端持久化")
+        kv_ok=cloud_table_exists("dashboard_kv")
+        dh_ok=cloud_table_exists("decision_history")
+        q1,q2,q3,q4=st.columns(4)
+        q1.metric("Supabase","已连接" if CLOUD else "未连接")
+        q2.metric("设置云端","正常" if kv_ok else "待升级")
+        q3.metric("决策历史云端","正常" if dh_ok else "待升级")
+        q4.metric("自动刷新","5分钟")
+        if CLOUD and kv_ok and dh_ok:
+            st.success("持仓、规则、预算、事件、底层穿透数据和决策历史具备云端持久化能力。重新部署后可恢复。")
+        elif CLOUD:
+            st.warning("Supabase 已连接，但 V34 的两个新表还没有建立。请运行压缩包中的 supabase_v34_upgrade.sql；不运行也能继续使用，只是部分新数据仍以本地文件为后备。")
+        else:
+            st.warning("当前未连接 Supabase，工作台仍可运行，但本地文件不能视为永久存储。")
+        st.caption("Streamlit Community Cloud 休眠属于托管平台行为；V34不能禁止休眠，但已减少唤醒后的网络阻塞和iPad频繁重绘。")
+
         st.subheader("数据源健康检查")
         health=data_health_table(m,sec,news)
         st.dataframe(health,hide_index=True,use_container_width=True)
@@ -1440,8 +1545,8 @@ def render(page):
         b.metric("新闻数量",len(news) if news is not None else 0)
         c.metric("持仓快照",HOLDINGS_ASOF)
         st.subheader("刷新与数据边界")
-        st.info("页面180秒轻量自动刷新；行情缓存60秒；板块180秒；新闻600秒。基金持仓不是实时数据，按季报快照展示。板块涨跌是核心成分代理，不冒充官方行业指数。")
-        st.warning("Streamlit Community Cloud 的本地文件可能在重启/重新部署后丢失，所以日志、规则、持仓修改不能视为永久云存储。")
+        st.info("页面300秒轻量自动刷新；行情缓存60秒；板块180秒；新闻600秒。基金持仓不是实时数据，按季报快照展示。板块涨跌是核心成分代理，不冒充官方行业指数。")
+        st.info("V34优先使用Supabase保存关键设置与决策历史；本地文件继续作为断网/迁移时的后备。交易持仓仍沿用原有portfolio与investment_logs云端表。")
         st.subheader("一键备份")
         st.download_button("下载全部工作台数据备份 ZIP",export_backup_bytes(),"ruanying_dashboard_backup.zip","application/zip",use_container_width=True)
         st.caption("备份包含已存在的投资日志、持仓、持仓快照、规则、预算和事件日历。")
@@ -1598,6 +1703,7 @@ def render(page):
                     }
                     with open(decision_file,"a",encoding="utf-8") as f:
                         f.write(json.dumps(snap,ensure_ascii=False)+"\n")
+                    cloud_decision_insert(snap)
                 except Exception:
                     pass
                 st.success(f"已保存 {len(tx_rows)} 笔交易，并自动更新持仓；同时保存了当时的决策环境。")
