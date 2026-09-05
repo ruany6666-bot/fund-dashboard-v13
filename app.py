@@ -10,7 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client
 
-st.set_page_config(page_title="阮嘤基金投资工作台 V35.3", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="阮嘤基金投资工作台 V37", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 HEADERS={"User-Agent":"Mozilla/5.0"}
 TZ=ZoneInfo("Asia/Shanghai")
@@ -188,14 +188,14 @@ div[role="radiogroup"][aria-label="二级导航"] > label:has(input:checked){
 
 st.markdown("""
 <style>
-/* ===== V35.3 iPad Pro 11 简约布局：内容不减，只重排 ===== */
+/* ===== V37 iPad Pro 11 极简布局：更大顶部安全区 + 去重复摘要 ===== */
 .block-container{max-width:1440px!important;padding-top:.35rem!important}
 /* 主内容顶部留出稳定空间，避免 Streamlit 工具栏覆盖二级导航 */
-[data-testid="stMainBlockContainer"]{padding-top:1.05rem!important}
+[data-testid="stMainBlockContainer"]{padding-top:3.15rem!important}
 /* 二级导航改成清晰的紧凑网格，不再挤成一条长横排 */
 div[role="radiogroup"][aria-label="二级导航"]{
  display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;
- gap:7px!important;width:100%!important;margin:.25rem 0 .9rem!important;
+ gap:7px!important;width:100%!important;margin:.45rem 0 1.0rem!important;
  position:relative!important;z-index:1!important;
 }
 div[role="radiogroup"][aria-label="二级导航"] > label{
@@ -217,7 +217,7 @@ h2{font-size:1.08rem!important;margin-top:.7rem!important}
 @media (min-width:900px) and (max-width:1366px){
  section[data-testid="stSidebar"]{width:218px!important}
  .block-container{max-width:1120px!important;padding:.45rem .7rem 1.5rem!important}
- [data-testid="stMainBlockContainer"]{padding-top:1.15rem!important}
+ [data-testid="stMainBlockContainer"]{padding-top:3.45rem!important}
  div[role="radiogroup"][aria-label="二级导航"]{grid-template-columns:repeat(4,minmax(0,1fr))!important}
  section[data-testid="stSidebar"] div[role="radiogroup"] > label{min-height:44px!important;font-size:13px!important}
 }
@@ -719,7 +719,7 @@ m,sec,news,S=compute()
 
 with st.sidebar:
     st.markdown("## 📊 阮嘤基金")
-    st.caption("V35.3 · iPad简约布局版")
+    st.caption("V37 · 自适应资产配置版")
     page=st.radio("功能导航",[
         "🎯 今日决策","📊 市场研究","💼 组合分析","🧾 交易与资金","⚙️ 管理与设置"
     ],label_visibility="collapsed")
@@ -1363,7 +1363,6 @@ def render_opportunity_radar(sec,news,S):
         best=x.iloc[0];st.success(f"当前优先级最高：{best['板块']}｜{best['当前动作']}｜工具：{best['可买工具/搜索关键词']}｜周期 {best['参考周期']}｜基准 {best['基准情景']}。")
 
 def render_new_money(sec,news,S):
-    st.markdown("## 💵 我的下一笔钱放哪里")
     st.caption("先比较现有基金和新板块，再决定新增资金；资金可以全部或部分留现金。")
     x=opportunity_radar(sec,news,S); d=dynamic_fund_decisions(S,news)
     budget=st.segmented_control("本次新增资金",[100,300,500,1000,2000],default=500,key="v352_new_money")
@@ -1384,13 +1383,11 @@ def render_new_money(sec,news,S):
     st.info(f"保留现金约 ¥{float(budget)-alloc.sum():.0f}。这部分用于突发回撤或第二笔确认，不强行花完。")
 
 def render_mid_long_strategy(S,news):
-    st.markdown("## 🧭 未来1–6个月怎么处理")
     d=dynamic_fund_decisions(S,news).copy()
     st.dataframe(d[["基金","当前持仓","组合占比%","机会分","中长期定位","参考周期","基准情景","悲观情景","减仓/失效条件"]],hide_index=True,use_container_width=True)
     st.caption("长期处理与今天的短期买卖分开：短期好不代表长期核心，长期看好也不代表任何价格都值得加。")
 
 def render_buyable_pool(sec,news,S):
-    st.markdown("## 🛒 可买工具池")
     st.caption("把机会落到可搜索、可申购的基金类别；下单前仍需在支付宝确认当日限购、申赎状态与费率。")
     x=opportunity_radar(sec,news,S).copy()
     st.dataframe(x[["板块","机会分","当前动作","可买工具/搜索关键词","参考周期","基准情景","悲观情景","组合上限%","失效条件"]],hide_index=True,use_container_width=True)
@@ -1401,9 +1398,161 @@ def render_buyable_pool(sec,news,S):
     st.write(f"**产品搜索：** {r['可买工具/搜索关键词']}")
     st.write(f"**风险退出：** {r['失效条件']}")
 
+
+# ===== V37 自适应资产配置：资金轮动 / 取现 / 决策验证 =====
+V37_DECISION_FILE=os.path.join(DATA_DIR,"v37_daily_decisions.jsonl")
+PROXY_SYMBOLS={
+    "纳指":"^IXIC","海外科技":"^SOX","建信":"^SOX","黄金":"GC=F",
+    "有色/铜":"COPX","越南":"VNM"
+}
+
+def _range_return(symbol, lookback, range_="6mo"):
+    try:
+        _,_,closes=yahoo(symbol,range_)
+        if len(closes)>lookback:
+            return (closes[-1]/closes[-1-lookback]-1)*100
+    except Exception:
+        pass
+    return None
+
+def _basket_range_return(secname,lookback):
+    vals=[]
+    for _,ysym,_ in BASKETS.get(secname,[]):
+        try:
+            _,_,closes=yahoo(ysym,"6mo")
+            if len(closes)>lookback:
+                vals.append((closes[-1]/closes[-1-lookback]-1)*100)
+        except Exception:
+            pass
+    return sum(vals)/len(vals) if vals else None
+
+@st.cache_data(ttl=1800)
+def proxy_returns_table():
+    rows=[]
+    mapping={
+        "纳指":"纳指","海外科技":"海外科技","建信":"建信","黄金":"黄金",
+        "CPO":"CPO/光通信","半导体":"半导体设备","有色/铜":"有色/铜","越南":"越南"
+    }
+    for typ,label in mapping.items():
+        vals=[]
+        for lb in [5,20,60]:
+            if typ in ["CPO","半导体"]:
+                v=_basket_range_return("CPO/光通信" if typ=="CPO" else "半导体设备",lb)
+            elif typ in PROXY_SYMBOLS:
+                v=_range_return(PROXY_SYMBOLS[typ],lb)
+            else:v=None
+            vals.append(v)
+        rows.append([label,*vals])
+    return pd.DataFrame(rows,columns=["方向","5日代理收益%","20日代理收益%","60日代理收益%"])
+
+def v37_daily_snapshot(S,news):
+    d=dynamic_fund_decisions(S,news)
+    payload={
+        "date":datetime.now(TZ).strftime("%Y-%m-%d"),
+        "time":datetime.now(TZ).isoformat(),
+        "market_state":S["state"],"risk":S["risk"],"vix":S["vix"],"us10y":S["tnx"],
+        "fund_decisions":d[["基金","机会分","今日动作","建议金额","暴露"]].to_dict("records")
+    }
+    # 同一天只保存一次，避免 Streamlit 自动刷新造成大量重复记录。
+    try:
+        old=[]
+        if os.path.exists(V37_DECISION_FILE):
+            with open(V37_DECISION_FILE,"r",encoding="utf-8") as f:
+                old=[json.loads(x) for x in f if x.strip()]
+        if not any(x.get("date")==payload["date"] for x in old):
+            with open(V37_DECISION_FILE,"a",encoding="utf-8") as f:
+                f.write(json.dumps(payload,ensure_ascii=False)+"\n")
+            cloud_kv_set(f"v37_decision_{payload['date']}",payload)
+    except Exception:
+        pass
+    return payload
+
+def rotation_plan(sec,news,S,max_rotate_pct=8):
+    d=dynamic_fund_decisions(S,news).copy()
+    radar=opportunity_radar(sec,news,S).copy()
+    sources=d[d["机会分"]<42].sort_values("机会分")
+    targets=[]
+    for _,r in d[d["机会分"]>=63].sort_values("机会分",ascending=False).iterrows():
+        targets.append((r["基金"],r["机会分"],"现有基金",r["参考周期"]))
+    for _,r in radar[radar["机会分"]>=60].sort_values("机会分",ascending=False).iterrows():
+        targets.append((r["板块"],r["机会分"],"新板块",r["参考周期"]))
+    rows=[]
+    if not targets:return pd.DataFrame(columns=["资金来源","建议转出","目标方向","目标类型","目标机会分","参考周期","理由"])
+    tdf=pd.DataFrame(targets,columns=["目标方向","目标机会分","目标类型","参考周期"]).drop_duplicates("目标方向").head(4)
+    for i,(_,src) in enumerate(sources.head(4).iterrows()):
+        target=tdf.iloc[i%len(tdf)]
+        amount=min(300,max(50,round(src["当前持仓"]*max_rotate_pct/100/10)*10))
+        if target["目标机会分"]-src["机会分"]<18:continue
+        rows.append([src["基金"],amount,target["目标方向"],target["目标类型"],int(target["目标机会分"]),target["参考周期"],f"机会分差 {int(target['目标机会分']-src['机会分'])}；优先改善资金效率，不以回本为前提"])
+    return pd.DataFrame(rows,columns=["资金来源","建议转出","目标方向","目标类型","目标机会分","参考周期","理由"])
+
+def render_rotation(sec,news,S):
+    st.caption("只在目标赔率明显高于现有持仓时建议迁移；不是为了每天换仓。")
+    pct=st.segmented_control("单次最多动用低效持仓",[5,8,10,15],default=8,format_func=lambda x:f"{x}%",key="v37_rotate_pct")
+    x=rotation_plan(sec,news,S,pct)
+    if x.empty:
+        st.success("当前没有达到‘值得换仓’的机会分差，暂不为了轮动而轮动。")
+    else:
+        st.dataframe(x,hide_index=True,use_container_width=True)
+        st.warning("执行时建议分批：先转出建议金额的50%，目标方向确认后再转剩余部分。")
+
+def render_withdraw_cash(S,news):
+    st.caption("需要用钱时，不平均卖出。优先从低机会分、重复度高、非核心持仓中释放资金。")
+    need=st.number_input("需要取出多少钱（元）",min_value=100.0,max_value=50000.0,value=1000.0,step=100.0,key="v37_withdraw")
+    d=dynamic_fund_decisions(S,news).copy().sort_values(["机会分","组合占比%"],ascending=[True,False])
+    remain=float(need);rows=[]
+    protected={"华安黄金ETF联接C","国泰纳斯达克100","德邦鑫星/CPO","东方人工智能/半导体"}
+    # 先非核心，再核心；单只默认不卖超过其持仓30%。
+    d["保护级"]=d["基金"].isin(protected).astype(int)
+    d=d.sort_values(["保护级","机会分"])
+    for _,r in d.iterrows():
+        if remain<=0:break
+        cap=r["当前持仓"]*(0.20 if r["保护级"] else 0.35)
+        sell=min(remain,max(0,round(cap/10)*10))
+        if sell<10:continue
+        rows.append([r["基金"],sell,r["机会分"],r["中长期定位"],"非核心/低赔率优先" if not r["保护级"] else "资金仍不足时才动核心仓"])
+        remain-=sell
+    st.dataframe(pd.DataFrame(rows,columns=["建议卖出基金","建议金额","机会分","定位","顺序逻辑"]),hide_index=True,use_container_width=True)
+    if remain>0:st.warning(f"按当前风险保护规则仍差约 ¥{remain:.0f}。如必须足额取现，再提高单只卖出比例。")
+    else:st.success(f"预计可释放约 ¥{need:.0f}，优先保护长期核心仓。")
+
+def render_validation(S,news):
+    v37_daily_snapshot(S,news)
+    st.caption("V37 从现在开始每天保存一次决策快照。5/20/60日后才能真正评价当时建议；下表先显示各方向当前代理资产的阶段收益。")
+    p=proxy_returns_table()
+    st.dataframe(p,hide_index=True,use_container_width=True)
+    hist=[]
+    try:
+        if os.path.exists(V37_DECISION_FILE):
+            with open(V37_DECISION_FILE,"r",encoding="utf-8") as f:hist=[json.loads(x) for x in f if x.strip()]
+    except Exception:hist=[]
+    a,b,c=st.columns(3)
+    a.metric("已积累决策日",len(hist))
+    b.metric("5日验证","可用" if len(hist)>=5 else f"还差 {max(0,5-len(hist))} 日")
+    c.metric("20/60日验证",("已进入20日" if len(hist)>=20 else "积累中") + (" / 已进入60日" if len(hist)>=60 else ""))
+    if hist:
+        latest=hist[-1]
+        st.caption(f"最近保存：{latest.get('date')}｜风险 {latest.get('risk')}｜{latest.get('market_state')}")
+    st.info("这里不会把‘当前上涨’伪装成过去建议的命中率。只有历史建议已经经过对应时间窗口后，才计入真实验证。")
+
+def render_v37_command_center(sec,news,S):
+    d=dynamic_fund_decisions(S,news); r=opportunity_radar(sec,news,S)
+    buy=d[d["建议金额"]>0]["建议金额"].sum(); sell=-d[d["建议金额"]<0]["建议金额"].sum()
+    topfund=d.iloc[0] if len(d) else None; topsec=r.iloc[0] if len(r) else None
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric("今日买入",f"¥{buy:.0f}")
+    c2.metric("今日减仓",f"¥{sell:.0f}")
+    c3.metric("净投入",f"¥{buy-sell:.0f}")
+    c4.metric("市场模式",regime_label(S))
+    if topfund is not None and topsec is not None:
+        st.success(f"优先检查：现有基金 **{topfund['基金']}**（{topfund['机会分']}/100）｜新方向 **{topsec['板块']}**（{topsec['机会分']}/100）。")
+    rp=rotation_plan(sec,news,S,8)
+    if len(rp):st.warning(f"发现 {len(rp)} 个资金效率改善候选，进入「🔄 资金轮动」查看具体从哪里卖、转到哪里。")
+    else:st.info("当前没有足够大的赔率差，不建议为了活跃而换仓。")
+
 CATEGORY_PAGES={
-    "🎯 今日决策":["💰 全持仓买卖","🎯 今日建议","💵 新钱去哪","🧭 未来1-6月策略","🏠 今日驾驶舱","🔥 机会与风险","🧠 决策大脑","📅 事件日历"],
-    "📊 市场研究":["🧭 全市场机会雷达","🛒 可买工具池","📈 市场看板","▦ 板块中心","📰 新闻中心"],
+    "🎯 今日决策":["⚡ 今日行动台","💰 全持仓买卖","🔄 资金轮动","💵 新钱去哪","💸 我要取钱","🧭 未来1-6月策略","🎯 今日建议","🏠 今日驾驶舱","🔥 机会与风险","🧠 决策大脑","📅 事件日历"],
+    "📊 市场研究":["🧭 全市场机会雷达","🛒 可买工具池","✅ 5/20/60日验证","📈 市场看板","▦ 板块中心","📰 新闻中心"],
     "💼 组合分析":["💼 基金中心","🔗 重合度分析","🧬 底层穿透","🧾 持仓穿透管理","🎯 仓位目标","🩺 组合体检"],
     "🧾 交易与资金":["📒 投资日志","💰 资金计划","🧾 持仓管理"],
     "⚙️ 管理与设置":["☁️ 云端同步","🛰 数据健康","⚙️ 投资规则"],
@@ -1425,17 +1574,30 @@ def render(page):
     page=choose_subpage(category)
     m,sec,news,S=compute()
     now=datetime.now(TZ)
-    st.caption(f"{category}  ›  {page}")
     st.markdown(f"# {page}")
-    top_terminal(S,news)
-    st.caption(f"页面每180秒刷新 ｜ 行情缓存60秒 ｜ 最近刷新：{now.strftime('%Y-%m-%d %H:%M:%S')}（北京时间）")
 
-    if page=="💰 全持仓买卖":
+    if page=="⚡ 今日行动台":
+        full_news=getnews("full")
+        v37_daily_snapshot(S,full_news)
+        render_v37_command_center(sec,full_news,S)
+        st.markdown("### 今日优先执行")
+        d=dynamic_fund_decisions(S,full_news)
+        st.dataframe(d[["基金","今日动作","建议金额","机会分","中长期定位","证据摘要"]].head(8),hide_index=True,use_container_width=True)
+        st.markdown("### 全市场第一梯队")
+        rr=opportunity_radar(sec,full_news,S)
+        st.dataframe(rr[["板块","机会分","当前动作","参考周期","基准情景","悲观情景","为什么现在"]].head(6),hide_index=True,use_container_width=True)
+    elif page=="💰 全持仓买卖":
         full_news=getnews("full")
         render_dynamic_all_funds(S,full_news)
         st.markdown("### 今日执行顺序")
         d=dynamic_fund_decisions(S,full_news)
         st.dataframe(d.sort_values("机会分",ascending=False)[["基金","今日动作","建议金额","机会分","证据摘要","中长期定位"]],hide_index=True,use_container_width=True)
+    elif page=="🔄 资金轮动":
+        full_news=getnews("full")
+        render_rotation(sec,full_news,S)
+    elif page=="💸 我要取钱":
+        full_news=getnews("full")
+        render_withdraw_cash(S,full_news)
     elif page=="💵 新钱去哪":
         full_news=getnews("full")
         render_new_money(sec,full_news,S)
@@ -1462,6 +1624,7 @@ def render(page):
         st.warning("不追涨；不因为一条低可信新闻改变长期配置；不同时把CPO、半导体、海外AI三条高相关风险链一起打到机会档。")
 
     elif page=="🏠 今日驾驶舱":
+        st.caption(f"{S['state']} ｜ 风险 {S['risk']}/100 ｜ 今日建议投入 ¥{S['total']} ｜ 新闻 {len(news)} 条 ｜ {now.strftime('%H:%M:%S')}")
         render_alert_center(S,news)
         render_today_advice(m,sec,news,S)
         st.info(f"今日执行：固定核心继续定投；动态仓根据风险调整。当前建议合计 ¥{S['total']}。")
@@ -1499,6 +1662,10 @@ def render(page):
     elif page=="🛒 可买工具池":
         full_news=getnews("full")
         render_buyable_pool(sec,full_news,S)
+
+    elif page=="✅ 5/20/60日验证":
+        full_news=getnews("full")
+        render_validation(S,full_news)
 
     elif page=="📈 市场看板":
         cols=st.columns(3)
@@ -2124,4 +2291,4 @@ def render(page):
         st.info("核心原则：价格下跌 ≠ 自动抄底。只有回撤 + 基本面未明显恶化，才进入机会档。")
 
 render(page)
-st.caption("V35.3 · iPad简约布局｜内容与决策功能完整保留")
+st.caption("V37 · 自适应资产配置版｜全持仓动态决策｜跨板块轮动｜资金调度｜5/20/60日验证框架")
