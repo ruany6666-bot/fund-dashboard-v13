@@ -435,7 +435,8 @@ FUND_MAP={
 "黄金/宏观":["华安黄金ETF联接C","国泰纳斯达克100","建信新兴市场"],
 "美股宏观":["国泰纳斯达克100","建信新兴市场"],
 "A股政策":["德邦鑫星/CPO","东方人工智能/半导体"],
-"创新药":[],"机器人":[],"有色/铜":["同泰慧盈混合C"],"电力/电网":[],"消费/白酒":[],"券商":[]
+"创新药":[],"机器人":[],"有色/铜":["同泰慧盈混合C"],"电力/电网":[],"消费/白酒":[],"券商":[],
+"红利/央企":[],"银行/保险":[],"能源/煤炭":[]
 }
 
 BASKETS={
@@ -447,6 +448,9 @@ BASKETS={
 "电力/电网":[("国电南瑞","600406.SS","sh600406"),("许继电气","000400.SZ","sz000400"),("平高电气","600312.SS","sh600312")],
 "消费/白酒":[("贵州茅台","600519.SS","sh600519"),("五粮液","000858.SZ","sz000858")],
 "券商":[("中信证券","600030.SS","sh600030"),("东方财富","300059.SZ","sz300059")],
+"红利/央企":[("中国神华","601088.SS","sh601088"),("长江电力","600900.SS","sh600900"),("中国移动","600941.SS","sh600941")],
+"银行/保险":[("工商银行","601398.SS","sh601398"),("招商银行","600036.SS","sh600036"),("中国平安","601318.SS","sh601318")],
+"能源/煤炭":[("中国神华","601088.SS","sh601088"),("兖矿能源","600188.SS","sh600188"),("陕西煤业","601225.SS","sh601225")],
 }
 
 POS=["增长","超预期","上调","订单","获批","扩产","growth","beat","record","raise","surge","upgrade","expands"]
@@ -544,6 +548,9 @@ def topic_from_title(lo):
     if any(x in lo for x in ["电网","储能","grid","power equipment"]):return "电力/电网"
     if any(x in lo for x in ["白酒","消费","consumer"]):return "消费/白酒"
     if any(x in lo for x in ["券商","brokerage","证券"]):return "券商"
+    if any(x in lo for x in ["红利","高股息","央企","dividend","state-owned"]):return "红利/央企"
+    if any(x in lo for x in ["银行","保险","bank","insurance"]):return "银行/保险"
+    if any(x in lo for x in ["煤炭","能源","coal","energy"]):return "能源/煤炭"
     return "其他"
 
 def source_grade(title):
@@ -583,7 +590,8 @@ def getnews(mode="lite"):
         "gold Federal Reserve Treasury yield when:3d","CPI nonfarm FOMC US stocks when:7d","US 10 year yield tech stocks when:3d",
         "中国 光模块 出口管制 when:7d","US China semiconductor export control when:7d","A股 政策 证监会 科技股 when:3d",
         "创新药 license-out FDA when:7d","人形机器人 humanoid robot when:7d","铜 紫金矿业 洛阳钼业 when:7d","电网 储能 电力设备 when:7d",
-        "白酒 消费 A股 when:7d","券商 东方财富 中信证券 when:7d"
+        "白酒 消费 A股 when:7d","券商 东方财富 中信证券 when:7d",
+        "A股 红利 高股息 央企 when:7d","银行 保险 A股 when:7d","煤炭 能源 中国神华 when:7d"
     ]
     lite_queries=[
         "NVIDIA AI data center when:3d","1.6T optical module CPO when:7d",
@@ -665,7 +673,7 @@ m,sec,news,S=compute()
 
 with st.sidebar:
     st.markdown("## 📊 阮嘤基金")
-    st.caption("V35 · 全持仓动态决策版")
+    st.caption("V35.2 · 主动轮动增强版")
     page=st.radio("功能导航",[
         "🎯 今日决策","📊 市场研究","💼 组合分析","🧾 交易与资金","⚙️ 管理与设置"
     ],label_visibility="collapsed")
@@ -675,10 +683,9 @@ with st.sidebar:
     st.caption(f"纳指{S['nasb']} · 黄金{S['goldb']} · CPO{S['cpob']} · 半导体{S['semib']} · 建信{S['jxb']}")
     if st.button("🔄 立即刷新",use_container_width=True):
         st.cache_data.clear();st.rerun()
-    with st.expander("连接与刷新状态",expanded=False):
-        st.caption("自动刷新：180秒 · 可手动立即刷新")
-        st.caption("新闻库：" + (f"🟢 {len(news)} 条" if not news.empty else "🔴 暂不可用"))
-        st.caption("云端同步：" + ("🟢 已连接" if CLOUD else "🟠 未连接"))
+    st.caption("自动刷新：180秒 · 可手动立即刷新")
+    st.caption("新闻库：" + (f"🟢 {len(news)} 条" if not news.empty else "🔴 暂不可用"))
+    st.caption("云端同步：" + ("🟢 已连接" if CLOUD else "🟠 未连接"))
 
 def render_news_cards(df,limit=20,prefix="n"):
     if df.empty:
@@ -1133,7 +1140,7 @@ def render_personal_news(news,limit=10):
                 st.link_button("查看来源 ↗",r["链接"],key=f"personal_news_{i}")
 
 
-# ===== V35 全持仓动态决策与全市场机会雷达 =====
+# ===== V35.2 主动轮动、全持仓决策与全市场机会雷达 =====
 FUND_DYNAMIC_MAP={
     "易方达全球成长精选":"海外科技","华安黄金ETF联接C":"黄金","德邦鑫星/CPO":"CPO",
     "建信新兴市场":"建信","华夏移动互联":"海外科技","东方人工智能/半导体":"半导体",
@@ -1142,97 +1149,215 @@ FUND_DYNAMIC_MAP={
 }
 BASE_DAILY={"国泰纳斯达克100":50,"华安黄金ETF联接C":50,"德邦鑫星/CPO":20,"东方人工智能/半导体":10,"华夏移动互联":10}
 
+SECTOR_TOOLS={
+    "CPO/光通信":"已有：德邦鑫星/CPO；新增可搜索：光通信/CPO主题指数或ETF联接",
+    "半导体设备":"已有：东方人工智能；新增可搜索：半导体设备/芯片设备主题基金",
+    "创新药":"可搜索：中证创新药、港股创新药ETF联接",
+    "机器人":"可搜索：中证机器人ETF联接、机器人主题指数基金",
+    "有色/铜":"已有：同泰慧盈；新增可搜索：有色金属/矿业/铜产业主题基金",
+    "电力/电网":"可搜索：电力ETF联接、电网设备/央企电力主题基金",
+    "消费/白酒":"可搜索：招商中证白酒指数C、消费ETF联接",
+    "券商":"可搜索：证券公司ETF联接C",
+    "红利/央企":"可搜索：红利低波ETF联接、央企红利ETF联接",
+    "银行/保险":"可搜索：银行ETF联接、保险主题指数基金",
+    "能源/煤炭":"可搜索：煤炭ETF联接、能源ETF联接",
+}
+
+SECTOR_PROFILE={
+    "CPO/光通信":dict(vol=24,horizon="3–12个月",maxw=18,kind="高弹性科技"),
+    "半导体设备":dict(vol=22,horizon="6–18个月",maxw=16,kind="国产替代成长"),
+    "创新药":dict(vol=24,horizon="6–18个月",maxw=10,kind="事件驱动成长"),
+    "机器人":dict(vol=26,horizon="6–18个月",maxw=10,kind="高波动主题"),
+    "有色/铜":dict(vol=18,horizon="3–12个月",maxw=12,kind="周期资源"),
+    "电力/电网":dict(vol=12,horizon="6–24个月",maxw=14,kind="稳健成长/防御"),
+    "消费/白酒":dict(vol=16,horizon="6–24个月",maxw=12,kind="价值修复"),
+    "券商":dict(vol=20,horizon="1–9个月",maxw=8,kind="高Beta周期"),
+    "红利/央企":dict(vol=10,horizon="6–24个月",maxw=18,kind="低波红利"),
+    "银行/保险":dict(vol=12,horizon="6–24个月",maxw=15,kind="价值/股息"),
+    "能源/煤炭":dict(vol=16,horizon="3–18个月",maxw=10,kind="周期/股息"),
+}
+
 def topic_signal(news,topics):
     if news is None or news.empty:return 50,0
-    x=news[news["主题"].isin(topics)].head(20)
+    x=news[news["主题"].isin(topics)].head(30)
     if x.empty:return 50,0
     w=x["重要度"].clip(lower=1) * x["可信度"].map({"A":1.3,"B":1.0,"C":0.65}).fillna(.65)
     return float((x["分数"]*w).sum()/max(w.sum(),1)),len(x)
 
-def dynamic_fund_decisions(S,news):
-    rows=[]
+def portfolio_exposure_weights():
+    total=max(safe_num(PORT["金额"].sum()),1)
+    expo={}
     for _,r in PORT.iterrows():
-        f=str(r["基金"]); amt=safe_num(r["金额"]); typ=FUND_DYNAMIC_MAP.get(f,"其他"); base=BASE_DAILY.get(f,0)
+        typ=FUND_DYNAMIC_MAP.get(str(r["基金"]),"其他")
+        expo[typ]=expo.get(typ,0)+safe_num(r["金额"])/total*100
+    return expo
+
+def regime_label(S):
+    if S["risk"]>=75 or S["vix"]>=30:return "防守优先"
+    if S["nas"]>=1 and S["vix"]<22 and S["tnx"]<4.5:return "风险偏好"
+    return "均衡轮动"
+
+def dynamic_scenario(score,vol):
+    edge=(score-50)/50
+    base_mid=edge*vol*.45
+    base_lo=base_mid-vol*.30; base_hi=base_mid+vol*.30
+    bull_hi=max(base_hi,vol*.75); bull_lo=max(2,base_hi*.6)
+    bear_lo=-vol*.85; bear_hi=-max(4,vol*.35)
+    return f"{base_lo:+.0f}%~{base_hi:+.0f}%",f"{bull_lo:+.0f}%~{bull_hi:+.0f}%",f"{bear_lo:+.0f}%~{bear_hi:+.0f}%"
+
+def fund_topics(typ):
+    return {
+      "纳指":["AI/算力","HBM/存储","美股宏观"],"海外科技":["AI/算力","HBM/存储","美股宏观"],
+      "建信":["AI/算力","HBM/存储","美股宏观"],"黄金":["黄金/宏观","美股宏观"],
+      "CPO":["CPO/光通信","AI/算力","A股政策"],"半导体":["半导体设备","A股政策"],
+      "有色/铜":["有色/铜","A股政策"],"越南":["美股宏观"]
+    }.get(typ,["A股政策"])
+
+def fund_long_profile(f,typ):
+    custom={
+      "国泰纳斯达克100":("核心成长","6–36个月","估值/利率显著恶化或组合科技暴露过高"),
+      "华安黄金ETF联接C":("防守对冲","3–24个月","实际利率持续上行、美元强势且避险需求下降"),
+      "德邦鑫星/CPO":("高弹性核心卫星","3–12个月","出口限制恶化、订单/景气证据转弱或单一板块过度集中"),
+      "东方人工智能/半导体":("国产设备成长","6–18个月","国产替代/资本开支逻辑转弱或估值严重透支"),
+      "建信新兴市场":("HBM/亚洲半导体机会仓","3–12个月","存储周期转弱、科技估值压力上升"),
+      "易方达全球成长精选":("保留观察/优化重复","3–12个月","与现有科技仓重复度高且持续跑输替代品"),
+      "华夏移动互联":("存量观察","1–9个月","风格漂移/重复暴露继续偏高"),
+      "嘉实全球产业升级":("等待优化","1–9个月","反弹后资金效率仍低则逐步切换"),
+      "天弘全球高端制造":("等待优化","1–9个月","反弹后资金效率仍低则逐步切换"),
+      "同泰慧盈混合C":("有色机会仓","3–12个月","商品周期和供需逻辑转弱"),
+      "天弘越南市场C":("小卫星仓","6–24个月","区域风险/流动性恶化或仓位占比超限"),
+    }
+    return custom.get(f,("观察仓","3–12个月","基本面或风险收益比恶化"))
+
+def dynamic_fund_decisions(S,news):
+    rows=[]; total=max(safe_num(PORT["金额"].sum()),1); expo=portfolio_exposure_weights()
+    for _,r in PORT.iterrows():
+        f=str(r["基金"]); amt=safe_num(r["金额"]); typ=FUND_DYNAMIC_MAP.get(f,"其他"); base=BASE_DAILY.get(f,0); weight=amt/total*100
         score=50; reasons=[]
+        ns,n=topic_signal(news,fund_topics(typ)); score+=(ns-50)*.25; reasons.append(f"相关新闻{n}条/新闻分{ns:.0f}")
         if typ in ["纳指","海外科技","建信"]:
-            score += 7 if S["nas"]<=-2 else (-5 if S["nas"]>=2 else 1)
-            score += 5 if S["vix"]<25 else (-12 if S["vix"]>=30 else -3)
-            score += 5 if S["tnx"]<4.4 else (-10 if S["tnx"]>=4.7 else -3)
-            ns,n=topic_signal(news,["AI/算力","HBM/存储","美股宏观"]);score+=(ns-50)*.22; reasons.append(f"海外科技新闻{n}条")
+            score += 8 if S["nas"]<=-2 else (-6 if S["nas"]>=2.5 else 1)
+            score += 6 if S["vix"]<25 else (-14 if S["vix"]>=30 else -4)
+            score += 6 if S["tnx"]<4.4 else (-12 if S["tnx"]>=4.7 else -4)
         elif typ=="黄金":
-            score += 8 if S["vix"]>=22 else 1; score += 5 if S["tnx"]<4.4 else -4
-            ns,n=topic_signal(news,["黄金/宏观"]);score+=(ns-50)*.25; reasons.append(f"黄金/宏观新闻{n}条")
+            score += 9 if S["vix"]>=22 else 1; score += 6 if S["tnx"]<4.4 else -5
         elif typ=="CPO":
-            score += 10 if S["cp"]<=-2 else (-6 if S["cp"]>=3 else 2); score += -18 if S["policy_bad"] else 5
-            ns,n=topic_signal(news,["CPO/光通信","AI/算力"]);score+=(ns-50)*.25; reasons.append(f"CPO/AI新闻{n}条")
+            score += 11 if S["cp"]<=-2 else (-8 if S["cp"]>=3 else 2); score += -20 if S["policy_bad"] else 4
         elif typ=="半导体":
-            score += 9 if S["sp"]<=-2 else (-5 if S["sp"]>=3 else 2)
-            ns,n=topic_signal(news,["半导体设备","A股政策"]);score+=(ns-50)*.25; reasons.append(f"半导体新闻{n}条")
+            score += 10 if S["sp"]<=-2 else (-6 if S["sp"]>=3 else 2)
         elif typ=="有色/铜":
-            ns,n=topic_signal(news,["有色/铜"]);score+=(ns-50)*.35; reasons.append(f"有色新闻{n}条")
+            score += 4 if regime_label(S)!="风险偏好" else 0
         elif typ=="越南":
-            score += 2 if S["risk"]<65 else -5; reasons.append("卫星市场，控制仓位")
+            score += 2 if S["risk"]<65 else -6
+        # 组合过度集中时自动降低继续加仓优先级
+        if typ in ["纳指","海外科技","建信"] and sum(expo.get(x,0) for x in ["纳指","海外科技","建信"])>50:
+            score-=7; reasons.append("海外科技总暴露偏高")
+        if weight>25: score-=10; reasons.append("单基金占比偏高")
         if S["risk"]>=80:score-=8
         score=max(0,min(100,score))
-        # 动作金额以当前组合规模为约束，避免为了“动态”强制频繁交易。
-        if score>=72: action="加仓"; delta=max(base,50 if amt>=1000 else 20)
-        elif score>=60: action="小幅加仓"; delta=max(base,20) if base else 20
+        if score>=76: action="加仓"; delta=max(base,50 if amt>=1000 else 30)
+        elif score>=63: action="小幅加仓"; delta=max(base,20) if base else 20
         elif score>=42: action="持有/按基础"; delta=base
         elif score>=30: action="小幅减仓"; delta=-min(100,max(20,round(amt*.05/10)*10))
         else: action="减仓"; delta=-min(300,max(50,round(amt*.10/10)*10))
-        rows.append([f,amt,typ,int(round(score)),action,int(delta),"；".join(reasons),str(r["定位"])])
-    return pd.DataFrame(rows,columns=["基金","当前持仓","暴露","机会分","今日动作","建议金额","证据摘要","中长期定位"]).sort_values("机会分",ascending=False)
+        pos,horizon,exit_rule=fund_long_profile(f,typ)
+        add_trigger="新闻与行业信号继续改善，且出现2%~5%回撤时分批加"
+        reduce_trigger=exit_rule
+        vol=22 if typ in ["纳指","海外科技","建信","CPO","半导体"] else 16 if typ in ["有色/铜","越南"] else 10
+        base_s,bull_s,bear_s=dynamic_scenario(score,vol)
+        rows.append([f,amt,weight,typ,int(round(score)),action,int(delta),horizon,base_s,bull_s,bear_s,add_trigger,reduce_trigger,"；".join(reasons),pos])
+    return pd.DataFrame(rows,columns=["基金","当前持仓","组合占比%","暴露","机会分","今日动作","建议金额","参考周期","基准情景","乐观情景","悲观情景","加仓触发","减仓/失效条件","证据摘要","中长期定位"]).sort_values("机会分",ascending=False)
 
 def opportunity_radar(sec,news,S):
-    rows=[]
-    topic_map={"CPO/光通信":"CPO/光通信","半导体设备":"半导体设备","创新药":"创新药","机器人":"机器人","有色/铜":"有色/铜","电力/电网":"电力/电网","消费/白酒":"消费/白酒","券商":"券商"}
+    rows=[]; regime=regime_label(S)
+    defensive={"红利/央企","银行/保险","电力/电网","能源/煤炭","消费/白酒"}
+    growth={"CPO/光通信","半导体设备","创新药","机器人"}
     for _,r in sec.iterrows():
-        name=r["板块"]; ch=safe_num(r["涨跌"]); ns,n=topic_signal(news,[topic_map.get(name,name)])
-        score=50+(8 if -4<=ch<=-1 else -6 if ch>=3 else 2)+(ns-50)*.30
-        if name=="CPO/光通信" and S["policy_bad"]:score-=18
-        if name in ["消费/白酒","电力/电网","券商"] and S["risk"]>=65:score+=5  # 科技风险高时提高传统/防御候选的比较优先级
-        score=max(0,min(100,score))
-        if score>=70:act="重点研究/分批建仓"
-        elif score>=58:act="观察买点/小仓试错"
-        elif score>=42:act="观察"
-        else:act="暂不参与"
-        # 情景区间是风险规划，不是收益承诺。
-        if name in ["CPO/光通信","机器人","创新药"]: horizon="3–12个月"; bull="+15%~+30%"; base="+5%~+15%"; bear="-15%~-25%"
-        elif name in ["消费/白酒","电力/电网","券商"]: horizon="6–18个月"; bull="+10%~+22%"; base="+3%~+12%"; bear="-10%~-18%"
-        else: horizon="3–12个月"; bull="+12%~+25%"; base="+4%~+12%"; bear="-12%~-22%"
-        rows.append([name,ch,int(round(score)),act,horizon,bull,base,bear,n])
-    return pd.DataFrame(rows,columns=["板块","今日代理涨跌%","机会分","当前动作","参考周期","乐观情景","基准情景","悲观情景","相关新闻数"]).sort_values("机会分",ascending=False)
+        name=r["板块"]; ch=safe_num(r["涨跌"]); ns,n=topic_signal(news,[name]); score=50
+        score += 9 if -4<=ch<=-1 else -7 if ch>=3 else 2
+        score += (ns-50)*.30
+        if name=="CPO/光通信" and S["policy_bad"]:score-=20
+        if regime=="防守优先" and name in defensive:score+=10
+        if regime=="防守优先" and name in growth:score-=7
+        if regime=="风险偏好" and name in growth:score+=6
+        if regime=="风险偏好" and name in defensive:score-=2
+        score=max(0,min(100,score)); profile=SECTOR_PROFILE.get(name,dict(vol=18,horizon="3–12个月",maxw=10,kind="主题"))
+        base_s,bull_s,bear_s=dynamic_scenario(score,profile["vol"])
+        if score>=72:act="分2–3笔建仓/加仓"
+        elif score>=60:act="小仓试错，回撤再加"
+        elif score>=45:act="观察，不追涨"
+        else:act="暂不参与/降低优先级"
+        why=f"代理涨跌{ch:+.1f}%；新闻分{ns:.0f}；当前市场={regime}"
+        invalid="新闻/基本面转弱、政策风险上升或板块快速涨至拥挤"
+        rows.append([name,ch,int(round(score)),act,profile["kind"],profile["horizon"],base_s,bull_s,bear_s,profile["maxw"],SECTOR_TOOLS.get(name,"搜索对应指数ETF联接"),why,invalid,n])
+    return pd.DataFrame(rows,columns=["板块","今日代理涨跌%","机会分","当前动作","类型","参考周期","基准情景","乐观情景","悲观情景","组合上限%","可买工具/搜索关键词","为什么现在","失效条件","相关新闻数"]).sort_values("机会分",ascending=False)
 
 def render_dynamic_all_funds(S,news):
     st.markdown("## 💰 全持仓今日买卖清单")
-    st.caption("每只基金每天都重新评估；没有定投也会给加/持/减判断。建议金额为决策档位，不因亏损本身强制补仓或止损。")
+    st.caption("每只基金每天都重算：定投=基础动作，动态建议=当天真实买卖判断；非定投基金同样会加/减仓。")
     d=dynamic_fund_decisions(S,news)
-    st.dataframe(d[["基金","当前持仓","机会分","今日动作","建议金额","中长期定位"]],hide_index=True,use_container_width=True)
+    st.dataframe(d[["基金","当前持仓","组合占比%","机会分","今日动作","建议金额","参考周期","基准情景","悲观情景"]],hide_index=True,use_container_width=True)
     buy=d[d["建议金额"]>0]["建议金额"].sum(); sell=-d[d["建议金额"]<0]["建议金额"].sum()
-    a,b,c=st.columns(3);a.metric("建议买入",f"¥{buy:.0f}");b.metric("建议减仓",f"¥{sell:.0f}");c.metric("净投入",f"¥{buy-sell:.0f}")
-    with st.expander("逐只基金：为什么 / 中长期怎么看",expanded=True):
-        for _,r in d.iterrows():
-            st.markdown(f"**{r['基金']}｜{r['今日动作']} {r['建议金额']:+.0f}元｜机会分 {r['机会分']}/100**")
-            st.caption(f"{r['证据摘要']}｜长期定位：{r['中长期定位']}")
+    a,b,c,d1=st.columns(4);a.metric("建议买入",f"¥{buy:.0f}");b.metric("建议减仓",f"¥{sell:.0f}");c.metric("净投入",f"¥{buy-sell:.0f}");d1.metric("市场模式",regime_label(S))
+    for _,r in d.iterrows():
+        with st.expander(f"{r['基金']}｜{r['今日动作']} {r['建议金额']:+.0f}元｜机会分 {r['机会分']}/100",expanded=False):
+            st.write(f"**为什么：** {r['证据摘要']}")
+            st.write(f"**中长期定位：** {r['中长期定位']}｜参考周期 {r['参考周期']}")
+            st.write(f"**情景：** 基准 {r['基准情景']}｜乐观 {r['乐观情景']}｜悲观 {r['悲观情景']}")
+            st.write(f"**继续加仓条件：** {r['加仓触发']}")
+            st.write(f"**减仓/逻辑失效：** {r['减仓/失效条件']}")
 
 def render_opportunity_radar(sec,news,S):
     st.markdown("## 🧭 全市场机会雷达")
-    st.caption("不局限于已持仓。科技赔率下降时，传统价值/防御/资源板块会参与横向比较。收益区间仅用于情景规划，不是承诺。")
-    x=opportunity_radar(sec,news,S);st.dataframe(x,hide_index=True,use_container_width=True)
+    st.caption("不仅追踪科技；市场转弱时红利、银行、电力、能源等传统价值方向会自动提高比较权重。收益区间是情景规划，不是承诺。")
+    x=opportunity_radar(sec,news,S)
+    st.metric("当前市场模式",regime_label(S))
+    st.dataframe(x,hide_index=True,use_container_width=True)
     if len(x):
-        best=x.iloc[0];st.info(f"当前扫描优先级最高：{best['板块']}｜{best['当前动作']}｜参考周期 {best['参考周期']}｜基准情景 {best['基准情景']}，悲观情景 {best['悲观情景']}。")
-    st.markdown("### 新增资金怎么分")
-    budget=st.segmented_control("可用新增资金",[100,300,500,1000],default=300,key="v35_budget")
-    top=x[x["机会分"]>=58].head(3)
-    if top.empty: st.warning("当前没有达到试仓阈值的板块：优先保留现金，而不是为了交易强行买入。")
-    else:
-        weights=top["机会分"]/top["机会分"].sum(); alloc=(weights*float(budget)).round(-1)
-        out=pd.DataFrame({"优先方向":top["板块"].values,"建议金额":alloc.values,"理由":top["当前动作"].values})
-        st.dataframe(out,hide_index=True,use_container_width=True)
+        best=x.iloc[0];st.success(f"当前优先级最高：{best['板块']}｜{best['当前动作']}｜工具：{best['可买工具/搜索关键词']}｜周期 {best['参考周期']}｜基准 {best['基准情景']}。")
+
+def render_new_money(sec,news,S):
+    st.markdown("## 💵 我的下一笔钱放哪里")
+    st.caption("先比较现有基金和新板块，再决定新增资金；资金可以全部或部分留现金。")
+    x=opportunity_radar(sec,news,S); d=dynamic_fund_decisions(S,news)
+    budget=st.segmented_control("本次新增资金",[100,300,500,1000,2000],default=500,key="v352_new_money")
+    cand=[]
+    for _,r in d[d["机会分"]>=63].head(4).iterrows():
+        cand.append(dict(方向=r["基金"],分数=r["机会分"],类型="现有基金",工具=r["基金"],周期=r["参考周期"],基准=r["基准情景"],悲观=r["悲观情景"]))
+    for _,r in x[x["机会分"]>=60].head(5).iterrows():
+        cand.append(dict(方向=r["板块"],分数=r["机会分"],类型="新板块",工具=r["可买工具/搜索关键词"],周期=r["参考周期"],基准=r["基准情景"],悲观=r["悲观情景"]))
+    if not cand:
+        st.warning(f"当前没有达到试仓阈值的机会。建议 ¥{budget} 全部保留现金。")
+        return
+    z=pd.DataFrame(cand).sort_values("分数",ascending=False).drop_duplicates("方向").head(4)
+    # 高风险时至少留20%现金；普通环境保留5%机动资金。
+    cash_rate=.20 if S["risk"]>=70 else .05
+    invest=float(budget)*(1-cash_rate); scores=(z["分数"]-50).clip(lower=1); alloc=(scores/scores.sum()*invest).round(-1)
+    out=z.copy();out["建议投入"]=alloc.values;out["执行方式"]="首笔50%，回撤/确认后再补第二笔"
+    st.dataframe(out[["方向","类型","建议投入","工具","周期","基准","悲观","执行方式"]],hide_index=True,use_container_width=True)
+    st.info(f"保留现金约 ¥{float(budget)-alloc.sum():.0f}。这部分用于突发回撤或第二笔确认，不强行花完。")
+
+def render_mid_long_strategy(S,news):
+    st.markdown("## 🧭 未来1–6个月怎么处理")
+    d=dynamic_fund_decisions(S,news).copy()
+    st.dataframe(d[["基金","当前持仓","组合占比%","机会分","中长期定位","参考周期","基准情景","悲观情景","减仓/失效条件"]],hide_index=True,use_container_width=True)
+    st.caption("长期处理与今天的短期买卖分开：短期好不代表长期核心，长期看好也不代表任何价格都值得加。")
+
+def render_buyable_pool(sec,news,S):
+    st.markdown("## 🛒 可买工具池")
+    st.caption("把机会落到可搜索、可申购的基金类别；下单前仍需在支付宝确认当日限购、申赎状态与费率。")
+    x=opportunity_radar(sec,news,S).copy()
+    st.dataframe(x[["板块","机会分","当前动作","可买工具/搜索关键词","参考周期","基准情景","悲观情景","组合上限%","失效条件"]],hide_index=True,use_container_width=True)
+    chosen=st.selectbox("我想进一步看哪个方向",x["板块"].tolist(),key="v352_pool_chosen")
+    r=x[x["板块"]==chosen].iloc[0]
+    st.write(f"**可以买的原因：** {r['为什么现在']}")
+    st.write(f"**建议执行：** {r['当前动作']}；组合上限建议 {r['组合上限%']}%。")
+    st.write(f"**产品搜索：** {r['可买工具/搜索关键词']}")
+    st.write(f"**风险退出：** {r['失效条件']}")
 
 CATEGORY_PAGES={
-    "🎯 今日决策":["🎯 今日建议","🏠 今日驾驶舱","🔥 机会与风险","🧠 决策大脑","📅 事件日历"],
-    "📊 市场研究":["📈 市场看板","🧭 全市场机会雷达","▦ 板块中心","📰 新闻中心"],
+    "🎯 今日决策":["💰 全持仓买卖","🎯 今日建议","💵 新钱去哪","🧭 未来1-6月策略","🏠 今日驾驶舱","🔥 机会与风险","🧠 决策大脑","📅 事件日历"],
+    "📊 市场研究":["🧭 全市场机会雷达","🛒 可买工具池","📈 市场看板","▦ 板块中心","📰 新闻中心"],
     "💼 组合分析":["💼 基金中心","🔗 重合度分析","🧬 底层穿透","🧾 持仓穿透管理","🎯 仓位目标","🩺 组合体检"],
     "🧾 交易与资金":["📒 投资日志","💰 资金计划","🧾 持仓管理"],
     "⚙️ 管理与设置":["☁️ 云端同步","🛰 数据健康","⚙️ 投资规则"],
@@ -1259,7 +1384,21 @@ def render(page):
     top_terminal(S,news)
     st.caption(f"页面每180秒刷新 ｜ 行情缓存60秒 ｜ 最近刷新：{now.strftime('%Y-%m-%d %H:%M:%S')}（北京时间）")
 
-    if page=="🎯 今日建议":
+    if page=="💰 全持仓买卖":
+        full_news=getnews("full")
+        render_dynamic_all_funds(S,full_news)
+        st.markdown("### 今日执行顺序")
+        d=dynamic_fund_decisions(S,full_news)
+        st.dataframe(d.sort_values("机会分",ascending=False)[["基金","今日动作","建议金额","机会分","证据摘要","中长期定位"]],hide_index=True,use_container_width=True)
+    elif page=="💵 新钱去哪":
+        full_news=getnews("full")
+        render_new_money(sec,full_news,S)
+        st.markdown("### 全市场候选方向")
+        st.dataframe(opportunity_radar(sec,full_news,S),hide_index=True,use_container_width=True)
+    elif page=="🧭 未来1-6月策略":
+        full_news=getnews("full")
+        render_mid_long_strategy(S,full_news)
+    elif page=="🎯 今日建议":
         render_dynamic_all_funds(S,news)
         render_v32_decision_core(m,sec,news,S)
         render_alert_center(S,news)
@@ -1290,7 +1429,7 @@ def render(page):
             st.warning("不追涨单日大涨板块；不在高可信基本面利空下机械抄底；不动用未来定投资金凑满仓。")
         with B:
             st.subheader("📰 今日重点新闻")
-            render_news_cards(news.head(5) if not news.empty else news,5,"home")
+            render_news_cards(news.head(8) if not news.empty else news,8,"home")
         st.subheader("🧭 新闻影响速览")
         nit=news_impact_table(news)
         if not nit.empty:
@@ -1310,6 +1449,10 @@ def render(page):
     elif page=="🧭 全市场机会雷达":
         full_news=getnews("full")
         render_opportunity_radar(sec,full_news,S)
+
+    elif page=="🛒 可买工具池":
+        full_news=getnews("full")
+        render_buyable_pool(sec,full_news,S)
 
     elif page=="📈 市场看板":
         cols=st.columns(3)
