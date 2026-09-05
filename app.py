@@ -10,7 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client
 
-st.set_page_config(page_title="阮嘤基金投资工作台 V34", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="阮嘤基金投资工作台 V35.3", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 HEADERS={"User-Agent":"Mozilla/5.0"}
 TZ=ZoneInfo("Asia/Shanghai")
@@ -185,6 +185,52 @@ div[role="radiogroup"][aria-label="二级导航"] > label:has(input:checked){
 </style>
 """, unsafe_allow_html=True)
 
+
+st.markdown("""
+<style>
+/* ===== V35.3 iPad Pro 11 简约布局：内容不减，只重排 ===== */
+.block-container{max-width:1440px!important;padding-top:.35rem!important}
+/* 主内容顶部留出稳定空间，避免 Streamlit 工具栏覆盖二级导航 */
+[data-testid="stMainBlockContainer"]{padding-top:1.05rem!important}
+/* 二级导航改成清晰的紧凑网格，不再挤成一条长横排 */
+div[role="radiogroup"][aria-label="二级导航"]{
+ display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;
+ gap:7px!important;width:100%!important;margin:.25rem 0 .9rem!important;
+ position:relative!important;z-index:1!important;
+}
+div[role="radiogroup"][aria-label="二级导航"] > label{
+ width:100%!important;min-width:0!important;min-height:38px!important;
+ justify-content:center!important;padding:5px 8px!important;border-radius:9px!important;
+ border:1px solid #e7eaf0!important;background:#fff!important;box-shadow:none!important;
+ font-size:13px!important;font-weight:600!important;white-space:nowrap!important;overflow:hidden!important;
+}
+div[role="radiogroup"][aria-label="二级导航"] > label:has(input:checked){
+ background:#f1f6ff!important;border-color:#cbdcff!important;color:#155fc2!important;
+}
+/* 收敛页面层级和空白 */
+h1{font-size:1.42rem!important;margin:.15rem 0 .55rem!important}
+h2{font-size:1.08rem!important;margin-top:.7rem!important}
+[data-testid="stMetric"]{border-radius:10px!important;box-shadow:none!important}
+.card,.advice-hero{border-radius:10px!important;box-shadow:none!important}
+.quickbar{margin-bottom:8px!important}.quickpill{padding:4px 9px!important}
+/* iPad Pro 11 横屏：侧栏更窄，主区更宽 */
+@media (min-width:900px) and (max-width:1366px){
+ section[data-testid="stSidebar"]{width:218px!important}
+ .block-container{max-width:1120px!important;padding:.45rem .7rem 1.5rem!important}
+ [data-testid="stMainBlockContainer"]{padding-top:1.15rem!important}
+ div[role="radiogroup"][aria-label="二级导航"]{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+ section[data-testid="stSidebar"] div[role="radiogroup"] > label{min-height:44px!important;font-size:13px!important}
+}
+/* iPad 竖屏/较窄窗口：二级导航自动两列 */
+@media (min-width:701px) and (max-width:899px){
+ div[role="radiogroup"][aria-label="二级导航"]{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+}
+@media(max-width:700px){
+ div[role="radiogroup"][aria-label="二级导航"]{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+ div[role="radiogroup"][aria-label="二级导航"] > label{font-size:12px!important}
+}
+</style>
+""", unsafe_allow_html=True)
 
 @st.cache_resource
 def get_cloud():
@@ -673,11 +719,11 @@ m,sec,news,S=compute()
 
 with st.sidebar:
     st.markdown("## 📊 阮嘤基金")
-    st.caption("V35.2 · 主动轮动增强版")
+    st.caption("V35.3 · iPad简约布局版")
     page=st.radio("功能导航",[
         "🎯 今日决策","📊 市场研究","💼 组合分析","🧾 交易与资金","⚙️ 管理与设置"
     ],label_visibility="collapsed")
-    st.caption("左侧只保留5个大类，具体功能在页面顶部切换。")
+    st.caption("5 个主区 · 功能在页面内切换")
     st.markdown("---")
     st.metric("今日建议",f"¥{S['total']}")
     st.caption(f"纳指{S['nasb']} · 黄金{S['goldb']} · CPO{S['cpob']} · 半导体{S['semib']} · 建信{S['jxb']}")
@@ -2078,4 +2124,4 @@ def render(page):
         st.info("核心原则：价格下跌 ≠ 自动抄底。只有回撤 + 基本面未明显恶化，才进入机会档。")
 
 render(page)
-st.caption("V27：新增手机竖屏优化与 Supabase 云端同步基础。")
+st.caption("V35.3 · iPad简约布局｜内容与决策功能完整保留")
