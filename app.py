@@ -10,7 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client
 
-st.set_page_config(page_title="阮嘤基金投资工作台 V39", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="阮嘤基金投资工作台 V40", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 HEADERS={"User-Agent":"Mozilla/5.0"}
 TZ=ZoneInfo("Asia/Shanghai")
@@ -182,6 +182,21 @@ div[role="radiogroup"][aria-label="二级导航"] > label:has(input:checked){
   [data-testid="stPlotlyChart"]{max-height:440px!important}
   .card{padding:10px 11px!important}
 }
+
+
+/* ===== V40 全局市场状态条 ===== */
+.market-strip{
+ display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:6px;margin:0 0 13px 0;
+}
+.market-chip{
+ background:#fff;border:1px solid #e5eaf0;border-radius:10px;padding:8px 9px;min-width:0;
+}
+.market-chip .mk{font-size:10px;color:#8a94a3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.market-chip .mv{font-size:14px;font-weight:800;color:#172033;white-space:nowrap}
+.market-chip .mc{font-size:11px;font-weight:700;margin-top:1px}
+.up{color:#d9363e}.down{color:#078b57}.flat{color:#7b8494}
+@media(max-width:1100px){.market-strip{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(max-width:700px){.market-strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -537,7 +552,8 @@ def markets():
         ("创业板",lambda:fallback(lambda:eastmoney("0.399006"),lambda:tencent("sz399006"),lambda:yahoo("399006.SZ")[:2])),
         ("科创50",lambda:fallback(lambda:eastmoney("1.000688"),lambda:tencent("sh000688"),lambda:yahoo("000688.SS")[:2])),
         ("纳斯达克",lambda:yahoo("^IXIC")[:2]),("标普500",lambda:yahoo("^GSPC")[:2]),("SOX",lambda:yahoo("^SOX")[:2]),
-        ("VIX",lambda:yahoo("^VIX")[:2]),("美债10Y",lambda:yahoo("^TNX")[:2]),("黄金",lambda:yahoo("GC=F")[:2])
+        ("VIX",lambda:yahoo("^VIX")[:2]),("美债10Y",lambda:yahoo("^TNX")[:2]),("黄金",lambda:yahoo("GC=F")[:2]),
+        ("Brent原油",lambda:yahoo("BZ=F")[:2]),("铜",lambda:yahoo("HG=F")[:2]),("美元指数",lambda:yahoo("DX-Y.NYB")[:2])
     ]
     rows=[]
     with ThreadPoolExecutor(max_workers=9) as ex:
@@ -581,6 +597,13 @@ def sector_history(secname):
     return pd.DataFrame(rows,columns=["交易日序号","股票","累计涨跌%"])
 
 def topic_from_title(lo):
+    # V40：全球重要性优先，不以当前持仓为筛选前提。
+    if any(x in lo for x in ["election","president","prime minister","government collapse","coup","大选","总统","首相","政府危机","政变"]):return "全球政治"
+    if any(x in lo for x in ["war","missile","attack","ceasefire","sanction","geopolit","战争","袭击","停火","制裁","中东","乌克兰","俄罗斯"]):return "地缘政治"
+    if any(x in lo for x in ["imf","world bank","global growth","gdp","recession","全球经济","经济增长","衰退"]):return "全球经济"
+    if any(x in lo for x in ["ecb","boj","bank of japan","bank of england","pboc","央行","欧洲央行","日本央行","英国央行","人民银行"]):return "全球央行"
+    if any(x in lo for x in ["tariff","trade war","trade deal","wto","关税","贸易战","贸易协议"]):return "贸易政策"
+    if any(x in lo for x in ["earnings","profit","revenue","guidance","财报","营收","利润","业绩指引"]):return "全球公司/财报"
     if any(x in lo for x in ["cpo","optical module","光模块","1.6t","800g"]):return "CPO/光通信"
     if any(x in lo for x in ["hbm","micron","hynix","samsung","dram","nand","存储"]):return "HBM/存储"
     if any(x in lo for x in ["nvidia","英伟达","ai data","gpu","blackwell","rubin"]):return "AI/算力"
@@ -599,7 +622,10 @@ def topic_from_title(lo):
     if any(x in lo for x in ["煤炭","能源","coal","energy"]):return "能源/煤炭"
     return "其他"
 
-AUTH_A=["reuters","路透","federal reserve","federalreserve.gov","sec.gov","csrc.gov.cn","证监会","上交所","深交所","hkex","nasdaq","nyse","公司公告","交易所"]
+AUTH_A=["reuters","路透","federal reserve","federalreserve.gov","sec.gov","csrc.gov.cn","证监会","上交所","深交所","hkex","nasdaq","nyse","公司公告","交易所",
+        "ecb.europa.eu","european central bank","bank of japan","boj.or.jp","bank of england","bankofengland.co.uk",
+        "pbc.gov.cn","中国人民银行","bls.gov","bea.gov","treasury.gov","whitehouse.gov","imf.org","worldbank.org",
+        "iea.org","opec.org","wto.org","欧盟委员会","ec.europa.eu","ap news","associated press"]
 AUTH_B=["bloomberg","彭博","financial times","cnbc","证券时报","中国证券报","上海证券报","第一财经","财联社"]
 
 def source_name(title):
@@ -623,7 +649,17 @@ def parse_dt(s):
 
 def summary_cn(title,topic,score):
     direction="利好" if score>=60 else "利空" if score<=40 else "中性"
-    if topic=="CPO/光通信":
+    if topic=="地缘政治":
+        impact="可能通过能源、避险、通胀、汇率和全球风险偏好影响多类资产。"
+    elif topic=="全球经济":
+        impact="可能影响全球增长预期、周期资产、利率和股票风险偏好。"
+    elif topic=="全球央行":
+        impact="可能影响全球利率、汇率、债券和股票估值。"
+    elif topic=="贸易政策":
+        impact="可能影响全球供应链、出口企业、通胀与跨国公司盈利预期。"
+    elif topic=="全球公司/财报":
+        impact="可能影响相关行业盈利预期与全球市场风险偏好。"
+    elif topic=="CPO/光通信":
         impact="主要影响光模块/CPO景气预期与相关基金。"
     elif topic=="HBM/存储":
         impact="主要影响建信、华夏移动互联等存储/HBM暴露。"
@@ -637,24 +673,64 @@ def summary_cn(title,topic,score):
         impact="属于观察信息，暂不单独改变核心定投计划。"
     return f"{direction}倾向。{impact}"
 
+GLOBAL_TOPIC_WEIGHT={
+    "地缘政治":27,"全球政治":25,"全球央行":26,"全球经济":24,"贸易政策":23,
+    "美股宏观":26,"黄金/宏观":21,"全球公司/财报":18,"AI/算力":19,"CPO/光通信":16,
+    "HBM/存储":16,"半导体设备":17,"有色/铜":17,"能源/煤炭":18,"A股政策":19,
+    "电力/电网":13,"创新药":12,"机器人":12,"消费/白酒":10,"券商":10,"红利/央企":10,"银行/保险":10,"其他":6,
+}
+CRITICAL_NEWS_WORDS=[
+    "emergency","war","attack","ceasefire","rate hike","rate cut","inflation","cpi","jobs","nonfarm",
+    "tariff","sanction","ban","default","bank failure","oil supply","opec","earthquake","missile",
+    "紧急","战争","袭击","停火","加息","降息","通胀","非农","关税","制裁","禁令","违约","银行危机","原油供应","导弹"
+]
+
+def global_news_score(topic,grade,published,title):
+    score=GLOBAL_TOPIC_WEIGHT.get(topic,6)
+    score += 34 if grade=="A" else 20 if grade=="B" else 0
+    now=datetime.now(TZ)
+    if pd.notna(published):
+        try:
+            hrs=max(0,(now-published).total_seconds()/3600)
+            score += 25 if hrs<=24 else 16 if hrs<=72 else 8 if hrs<=168 else 0
+        except Exception: pass
+    lo=str(title).lower()
+    score += min(15,5*sum(1 for x in CRITICAL_NEWS_WORDS if x in lo))
+    return int(max(0,min(100,score)))
+
+def rank_global_news(df):
+    if df is None or df.empty:return df
+    x=df.copy()
+    if "全球重要分" not in x.columns:
+        x["全球重要分"]=x.apply(lambda r:global_news_score(r.get("主题","其他"),r.get("可信度","C"),r.get("发布时间",pd.NaT),r.get("新闻","")),axis=1)
+    return x.sort_values(["全球重要分","发布时间","重要度"],ascending=[False,False,False],na_position="last")
+
 @st.cache_data(ttl=600)
 def getnews(mode="lite"):
     # V28：首屏只取核心新闻，新闻中心再加载完整新闻库，避免手机首次打开被几十个RSS请求阻塞。
     full_queries=[
+        # 全球重大事件：不要求与当前持仓直接相关
+        "Reuters world markets breaking news when:2d","Reuters global economy recession growth when:3d",
+        "Reuters Federal Reserve inflation jobs Treasury when:3d","Reuters ECB BOJ Bank of England central bank when:5d",
+        "Reuters China economy policy markets when:3d","Reuters Europe economy markets when:3d","Reuters Japan economy yen BOJ when:3d",
+        "Reuters Middle East oil conflict when:3d","Reuters Russia Ukraine war sanctions when:3d","Reuters tariffs trade policy US China EU when:3d",
+        "Reuters OPEC oil Brent natural gas when:3d","Reuters gold copper commodities mining when:3d",
+        "Reuters major company earnings guidance markets when:3d","Reuters banking financial stability when:3d",
+        # 科技与产业
         "NVIDIA AI data center when:3d","OpenAI data center when:3d","Microsoft Meta Google AI capex when:3d","Blackwell Rubin GPU demand when:7d",
         "1.6T optical module CPO when:7d","800G optical module China when:7d","中际旭创 新易盛 光模块 when:7d","Lumentum optical transceiver when:7d",
         "HBM Micron SK Hynix Samsung when:7d","DRAM NAND memory price when:7d","Kioxia SanDisk memory when:7d",
         "中国 半导体设备 北方华创 中微公司 when:7d","国产半导体设备 when:7d",
-        "gold Federal Reserve Treasury yield when:3d","CPI nonfarm FOMC US stocks when:7d","US 10 year yield tech stocks when:3d",
-        "中国 光模块 出口管制 when:7d","US China semiconductor export control when:7d","A股 政策 证监会 科技股 when:3d",
+        # A股、政策与资源
+        "A股 政策 证监会 科技股 when:3d","证监会 官方 政策 when:7d","中国 央行 货币政策 when:7d",
         "创新药 license-out FDA when:7d","人形机器人 humanoid robot when:7d","铜 紫金矿业 洛阳钼业 when:7d","电网 储能 电力设备 when:7d",
-        "白酒 消费 A股 when:7d","券商 东方财富 中信证券 when:7d",
-        "A股 红利 高股息 央企 when:7d","银行 保险 A股 when:7d","煤炭 能源 中国神华 when:7d","Reuters oil OPEC Brent when:3d","Reuters copper mining gold natural resources when:3d","Federal Reserve FOMC inflation when:7d","证监会 官方 政策 when:7d"
+        "白酒 消费 A股 when:7d","券商 东方财富 中信证券 when:7d","A股 红利 高股息 央企 when:7d","银行 保险 A股 when:7d","煤炭 能源 中国神华 when:7d"
     ]
     lite_queries=[
+        "Reuters world markets breaking news when:2d","Reuters Federal Reserve inflation jobs Treasury when:3d",
+        "Reuters Middle East oil conflict when:3d","Reuters China economy policy markets when:3d",
         "NVIDIA AI data center when:3d","1.6T optical module CPO when:7d",
         "HBM Micron SK Hynix Samsung when:7d","中国 半导体设备 北方华创 中微公司 when:7d",
-        "gold Federal Reserve Treasury yield when:3d","US China semiconductor export control when:7d",
         "A股 政策 证监会 科技股 when:3d"
     ]
     queries = full_queries if mode=="full" else lite_queries
@@ -695,7 +771,8 @@ def getnews(mode="lite"):
         df["新闻"]=df["新闻"].apply(clean_news_title)
         df["摘要"]=df.apply(lambda r:summary_cn(r["新闻"],r["主题"],r["分数"]),axis=1)
         df["影响基金"]=df["主题"].apply(lambda t:"、".join(FUND_MAP.get(t,[])) or "无直接核心基金映射")
-        df=df.sort_values(["发布时间","重要度"],ascending=[False,False],na_position="last")
+        df["全球重要分"]=df.apply(lambda r:global_news_score(r["主题"],r["可信度"],r["发布时间"],r["新闻"]),axis=1)
+        df=rank_global_news(df)
     return df
 
 def compute():
@@ -733,11 +810,11 @@ m,sec,news,S=compute()
 
 with st.sidebar:
     st.markdown("## 📊 阮嘤基金")
-    st.caption("V39 · 信息架构精简版")
+    st.caption("V40 · 全球市场终端版")
     page=st.radio("功能导航",[
         "🎯 今日决策","📰 市场资讯","📊 市场研究","💼 组合分析","⚙️ 资金与管理"
     ],label_visibility="collapsed")
-    st.caption("5 个主区 · 市场资讯独立一级入口")
+    st.caption("5 个主区 · 全球新闻按重要性排序")
     st.markdown("---")
     st.metric("今日建议",f"¥{S['total']}")
     st.caption(f"纳指{S['nasb']} · 黄金{S['goldb']} · CPO{S['cpob']} · 半导体{S['semib']} · 建信{S['jxb']}")
@@ -748,19 +825,39 @@ with st.sidebar:
     st.caption("云端同步：" + ("🟢 已连接" if CLOUD else "🟠 未连接"))
 
 def render_news_cards(df,limit=20,prefix="n"):
-    if df.empty:
-        st.caption("暂无匹配新闻")
+    if df is None or df.empty:
+        st.caption("暂无匹配的权威资讯")
         return
+    df=rank_global_news(df)
     for i,(_,r) in enumerate(df.head(limit).iterrows()):
         lab="🟢 利好" if r["分数"]>=60 else "🔴 利空" if r["分数"]<=40 else "🟡 中性"
         pub=r["发布时间"].strftime("%m-%d %H:%M") if pd.notna(r["发布时间"]) else r["时间"]
+        gscore=int(r.get("全球重要分",0) or 0)
         with st.container(border=True):
-            st.markdown(f"**{lab}｜{r['主题']}｜重要度 {'★'*int(r['重要度'])}｜可信度 {r['可信度']}**")
-            st.write(r["新闻"])
-            st.caption(r["摘要"])
-            st.caption(f"{pub} ｜ 来源：{r.get('来源','待核验')} ｜ 影响基金：{r['影响基金']}")
+            st.markdown(f"**全球重要 {gscore}/100｜{r['主题']}｜{lab}｜来源 {r.get('来源','待核验')}**")
+            st.markdown(f"**事实：** {r['新闻']}")
+            st.caption(f"发布时间：{pub} ｜ 可信度：{r['可信度']}")
+            st.markdown(f"**工作台判断：** {r['摘要']}")
+            if r.get("影响基金","无直接核心基金映射")!="无直接核心基金映射":
+                st.caption(f"关联持仓：{r['影响基金']}")
             if r["链接"]:
-                st.link_button("打开原文 ↗",r["链接"],key=f"{prefix}_{i}_{r.name}")
+                st.link_button("查看原始来源 ↗",r["链接"],key=f"{prefix}_{i}_{r.name}")
+
+
+def render_global_market_strip(m):
+    names=["纳斯达克","上证","黄金","Brent原油","铜","美债10Y","VIX","美元指数"]
+    label={"纳斯达克":"纳指","上证":"上证","黄金":"黄金","Brent原油":"Brent","铜":"铜","美债10Y":"美债10Y","VIX":"VIX","美元指数":"美元"}
+    cells=[]
+    for n in names:
+        x=m[m["市场"]==n]
+        if len(x) and pd.notna(x.iloc[0]["价格"]):
+            p=float(x.iloc[0]["价格"]); c=x.iloc[0]["涨跌"]
+            c=float(c) if pd.notna(c) else 0.0
+            cls="up" if c>0 else "down" if c<0 else "flat"
+            cells.append(f'<div class="market-chip"><div class="mk">{label[n]}</div><div class="mv">{p:,.2f}</div><div class="mc {cls}">{c:+.2f}%</div></div>')
+        else:
+            cells.append(f'<div class="market-chip"><div class="mk">{label[n]}</div><div class="mv">—</div><div class="mc flat">暂不可用</div></div>')
+    st.markdown('<div class="market-strip">'+''.join(cells)+'</div>',unsafe_allow_html=True)
 
 
 def top_terminal(S, news):
@@ -1566,7 +1663,7 @@ def render_v37_command_center(sec,news,S):
 
 CATEGORY_PAGES={
     "🎯 今日决策":["⚡ 今日决策","💰 买卖与资金","🧭 中期策略","📅 事件与计划"],
-    "📰 市场资讯":["⭐ 今日必看","🌍 宏观与全球市场","🤖 科技产业","⛏️ 资源与A股"],
+    "📰 市场资讯":["⭐ 今日必看","🌐 全球要闻","📈 市场与宏观","🧩 产业与资源"],
     "📊 市场研究":["📊 市场与机会","🧪 决策验证","▦ 板块深度"],
     "💼 组合分析":["💼 我的基金","🩺 组合诊断","🧬 底层持仓"],
     "⚙️ 资金与管理":["💼 持仓与资金","📒 交易记录","⚙️ 系统与规则"],
@@ -1589,24 +1686,46 @@ def render(page):
     m,sec,news,S=compute()
     now=datetime.now(TZ)
     st.markdown(f"# {page}")
+    render_global_market_strip(m)
 
     if page=="⚡ 今日决策":
-        full_news=getnews("full")
+        full_news=rank_global_news(getnews("full"))
         v37_daily_snapshot(S,full_news)
-        render_v37_command_center(sec,full_news,S)
-        t1,t2,t3,t4=st.tabs(["今日执行","持仓动作","机会与风险","决策依据"])
-        with t1:
-            d=dynamic_fund_decisions(S,full_news)
-            st.dataframe(d[["基金","今日动作","建议金额","机会分","证据摘要"]].head(10),hide_index=True,use_container_width=True)
-            st.markdown("### 今日最重要资讯")
-            render_news_cards(full_news.head(6) if not full_news.empty else full_news,6,"v39_home")
-        with t2:
-            render_dynamic_all_funds(S,full_news)
-        with t3:
-            rr=opportunity_radar(sec,full_news,S)
-            st.dataframe(rr[["板块","机会分","当前动作","参考周期","为什么现在"]].head(8),hide_index=True,use_container_width=True)
-            render_alert_center(S,full_news)
-        with t4:
+        d=dynamic_fund_decisions(S,full_news)
+        rr=opportunity_radar(sec,full_news,S)
+
+        st.markdown("## ① 今天发生什么")
+        topn=full_news[full_news["可信度"].isin(["A","B"])].head(5) if not full_news.empty else full_news
+        render_news_cards(topn,5,"v40_today_news")
+
+        st.markdown("## ② 今天怎么做")
+        c1,c2,c3,c4=st.columns(4)
+        buy=d[d["建议金额"]>0]["建议金额"].sum() if len(d) else 0
+        sell=-d[d["建议金额"]<0]["建议金额"].sum() if len(d) else 0
+        c1.metric("建议买入",f"¥{buy:.0f}")
+        c2.metric("建议减仓",f"¥{sell:.0f}")
+        c3.metric("净投入",f"¥{buy-sell:.0f}")
+        c4.metric("市场模式",regime_label(S))
+        if len(d): st.dataframe(d[["基金","今日动作","建议金额","机会分","证据摘要"]].head(10),hide_index=True,use_container_width=True)
+
+        st.markdown("## ③ 最大机会 / 最大风险")
+        L,R=st.columns(2)
+        with L:
+            st.markdown("### 🔥 机会")
+            if len(rr): st.dataframe(rr[["板块","机会分","当前动作","参考周期","为什么现在"]].head(5),hide_index=True,use_container_width=True)
+        with R:
+            st.markdown("### 🚨 风险")
+            risks=pd.DataFrame([
+                ["美债10Y",S["tnx"],90 if S["tnx"]>=4.6 else 60],
+                ["VIX",S["vix"],90 if S["vix"]>=30 else 55],
+                ["政策风险","触发" if S["policy_bad"] else "未触发",95 if S["policy_bad"] else 30],
+                ["纳指单日",S["nas"],80 if S["nas"]<=-2.5 else 40],
+                ["CPO单日",S["cp"],80 if S["cp"]<=-3 else 40],
+            ],columns=["风险","当前","风险分"])
+            st.dataframe(risks.sort_values("风险分",ascending=False),hide_index=True,use_container_width=True)
+
+        st.markdown("## ④ 详细依据")
+        with st.expander("展开决策规则、新闻影响与触发条件"):
             st.dataframe(decision_reason_cards(S),hide_index=True,use_container_width=True)
             nit=news_impact_table(full_news)
             if not nit.empty: st.dataframe(nit.head(10),hide_index=True,use_container_width=True)
@@ -1626,53 +1745,63 @@ def render(page):
         st.dataframe(opportunity_radar(sec,full_news,S).head(10),hide_index=True,use_container_width=True)
 
     elif page=="📅 事件与计划":
-        st.subheader("未来重要事件")
         ev=pd.DataFrame(events)
-        st.dataframe(ev,hide_index=True,use_container_width=True) if not ev.empty else st.caption("暂无已确认事件")
-        st.info("这里只维护可靠日期；CPI、非农、FOMC、重要财报和政策事件会作为动态仓位的前置风险条件。")
+        st.subheader("未来重要事件")
+        if not ev.empty: st.dataframe(ev,hide_index=True,use_container_width=True)
+        else: st.caption("暂无已确认事件")
+        st.caption("只维护可靠日期；CPI、非农、FOMC、重要财报和政策事件作为动态仓位前置风险条件。")
 
-    elif page in ["⭐ 今日必看","🌍 宏观与全球市场","🤖 科技产业","⛏️ 资源与A股"]:
-        full_news=getnews("full")
+    elif page in ["⭐ 今日必看","🌐 全球要闻","📈 市场与宏观","🧩 产业与资源"]:
+        full_news=rank_global_news(getnews("full"))
         x=full_news[full_news["可信度"].isin(["A","B"])].copy() if not full_news.empty else full_news
         topic_map={
-            "🌍 宏观与全球市场":["黄金/宏观","AI/算力"],
-            "🤖 科技产业":["AI/算力","CPO/光通信","HBM/存储","半导体设备"],
-            "⛏️ 资源与A股":["黄金/宏观","有色/铜","能源/煤炭","A股政策","红利/央企","银行/保险"],
+            "🌐 全球要闻":["全球政治","地缘政治","全球经济","全球央行","贸易政策","全球公司/财报"],
+            "📈 市场与宏观":["美股宏观","黄金/宏观","全球经济","全球央行","贸易政策","A股政策"],
+            "🧩 产业与资源":["AI/算力","CPO/光通信","HBM/存储","半导体设备","创新药","机器人","有色/铜","能源/煤炭","电力/电网","消费/白酒","券商","红利/央企","银行/保险"],
         }
         if page in topic_map and not x.empty: x=x[x["主题"].isin(topic_map[page])]
-        if page=="⭐ 今日必看" and not x.empty:
-            x=x.sort_values(["可信度","重要度","发布时间"],ascending=[True,False,False],na_position="last").head(12)
-            st.info("宁缺毋滥：优先权威一手来源和高影响事件；新闻事实与工作台分析分开显示。")
-        render_personal_news(x,10)
-        render_news_cards(x,30,"v39_news")
+        if page=="⭐ 今日必看":
+            if not x.empty:
+                strong=x[x["全球重要分"]>=60]
+                x=(strong if len(strong)>=5 else x).head(12)
+            st.info("按全球重要性排序，不要求与当前持仓相关。优先 Reuters、央行/政府/交易所/公司公告等权威来源；新闻事实与工作台判断分开显示。")
+        a,b,c=st.columns(3)
+        if not x.empty:
+            a.metric("权威资讯",len(x))
+            b.metric("最高重要分",int(x["全球重要分"].max()))
+            c.metric("A 级来源",int((x["可信度"]=="A").sum()))
+        render_news_cards(x,30,"v40_news")
 
     elif page=="📊 市场与机会":
         full_news=getnews("full")
         render_opportunity_radar(sec,full_news,S)
-        st.markdown("### 可买工具")
-        render_buyable_pool(sec,full_news,S)
-        st.markdown("### 核心市场")
-        cols=st.columns(3)
+        with st.expander("可买工具池"):
+            render_buyable_pool(sec,full_news,S)
+        st.markdown("### 全球核心市场")
+        cols=st.columns(4)
         for i,(_,r) in enumerate(m.iterrows()):
-            cols[i%3].metric(r["市场"],"暂不可用" if pd.isna(r["价格"]) else f'{r["价格"]:.2f}',None if pd.isna(r["涨跌"]) else f'{r["涨跌"]:+.2f}%')
+            cols[i%4].metric(r["市场"],"暂不可用" if pd.isna(r["价格"]) else f'{r["价格"]:.2f}',None if pd.isna(r["涨跌"]) else f'{r["涨跌"]:+.2f}%')
 
     elif page=="🧪 决策验证":
         render_validation(S,getnews("full"))
 
     elif page=="▦ 板块深度":
-        st.info("选择一个板块查看核心成分、近期走势和权威相关新闻。")
-        chosen=st.selectbox("选择板块",list(BASKETS.keys()),key="v39_sector")
+        chosen=st.selectbox("选择板块",list(BASKETS.keys()),key="v40_sector")
         r=sec[sec["板块"]==chosen].iloc[0]
-        st.metric("代理涨跌","—" if pd.isna(r["涨跌"]) else f'{r["涨跌"]:+.2f}%')
+        a,b=st.columns(2)
+        a.metric("代理涨跌","—" if pd.isna(r["涨跌"]) else f'{r["涨跌"]:+.2f}%')
+        b.metric("风险温度",f"{S['risk']}/100")
         hist=sector_history(chosen)
         if not hist.empty: st.plotly_chart(px.line(hist,x="交易日序号",y="累计涨跌%",color="股票"),use_container_width=True)
         st.write("核心成分：",r["核心成分"])
 
     elif page=="💼 我的基金":
-        chosen=st.selectbox("选择我的基金",PORT["基金"].tolist(),key="v39_fund")
+        chosen=st.selectbox("选择我的基金",PORT["基金"].tolist(),key="v40_fund")
         r=PORT[PORT["基金"]==chosen].iloc[0]
-        a,b,c,d=st.columns(4);a.metric("当前金额",f'¥{r["金额"]:,.2f}');b.metric("定位",r["定位"]);c.metric("主要暴露",r["主要暴露"]);d.metric("动作",r["动作"])
+        a,b,c,d=st.columns(4)
+        a.metric("当前金额",f'¥{r["金额"]:,.2f}');b.metric("定位",r["定位"]);c.metric("主要暴露",r["主要暴露"]);d.metric("动作",r["动作"])
         if chosen in TOP_HOLDINGS: st.dataframe(pd.DataFrame(TOP_HOLDINGS[chosen],columns=["重仓资产","权重%"]),hide_index=True,use_container_width=True)
+        st.caption("V40 暂不伪造成本和盈亏；待录入真实成本后再计算累计收益与收益率。")
 
     elif page=="🩺 组合诊断":
         st.dataframe(portfolio_weights()[["基金","金额","定位","主要暴露","权重"]],hide_index=True,use_container_width=True)
@@ -1691,757 +1820,29 @@ def render(page):
     elif page=="💼 持仓与资金":
         t1,t2=st.tabs(["持仓管理","资金计划"])
         with t1:
-            edited=st.data_editor(PORT,use_container_width=True,hide_index=True,num_rows="dynamic",key="v39_port")
-            if st.button("保存持仓",key="v39_save_port"): save_port(edited);save_snapshot(edited);st.success("已保存")
+            edited=st.data_editor(PORT,use_container_width=True,hide_index=True,num_rows="dynamic",key="v40_port")
+            if st.button("保存持仓",key="v40_save_port"): save_port(edited);save_snapshot(edited);st.success("已保存")
         with t2:
             st.metric("本月预算",f'¥{budget["月预算"]:,.0f}')
-            st.caption(f"今日建议投入 ¥{S['total']}；资金配置仍由今日决策页动态判断。")
+            st.caption(f"今日建议投入 ¥{S['total']}；资金配置由今日决策页动态判断。")
 
     elif page=="📒 交易记录":
-        st.info("交易记录功能保留在这里；详细逐基金交易录入沿用原交易日志模块。")
         tx_file=os.path.join(DATA_DIR,"fund_transactions.csv")
         if os.path.exists(tx_file):
-            try: st.dataframe(pd.read_csv(tx_file).tail(50),hide_index=True,use_container_width=True)
+            try: st.dataframe(pd.read_csv(tx_file).tail(80),hide_index=True,use_container_width=True)
             except: st.caption("交易记录暂不可读取")
+        else: st.caption("暂无本地交易记录")
 
     elif page=="⚙️ 系统与规则":
         t1,t2,t3=st.tabs(["投资规则","云端同步","数据健康"])
         with t1:
-            edited={k:st.number_input(k,min_value=0,max_value=500,value=int(v0),step=10,key="v39_rule_"+k) for k,v0 in rules.items()}
-            if st.button("保存投资规则",key="v39_rules_save"): save_json(RULE_FILE,edited);st.success("已保存")
+            edited={k:st.number_input(k,min_value=0,max_value=500,value=int(v0),step=10,key="v40_rule_"+k) for k,v0 in rules.items()}
+            if st.button("保存投资规则",key="v40_rules_save"): save_json(RULE_FILE,edited);st.success("已保存")
         with t2:
             st.success("Supabase 已连接") if CLOUD else st.warning("当前未连接 Supabase")
             st.caption("持仓、规则、预算与关键决策数据优先云端持久化。")
         with t3:
             st.dataframe(data_health_table(m,sec,news),hide_index=True,use_container_width=True)
 
-    elif page=="⚡ 今日行动台":
-        full_news=getnews("full")
-        v37_daily_snapshot(S,full_news)
-        render_v37_command_center(sec,full_news,S)
-        st.markdown("### 今日优先执行")
-        d=dynamic_fund_decisions(S,full_news)
-        st.dataframe(d[["基金","今日动作","建议金额","机会分","中长期定位","证据摘要"]].head(8),hide_index=True,use_container_width=True)
-        st.markdown("### 全市场第一梯队")
-        rr=opportunity_radar(sec,full_news,S)
-        st.dataframe(rr[["板块","机会分","当前动作","参考周期","基准情景","悲观情景","为什么现在"]].head(6),hide_index=True,use_container_width=True)
-    elif page=="💰 全持仓买卖":
-        full_news=getnews("full")
-        render_dynamic_all_funds(S,full_news)
-        st.markdown("### 今日执行顺序")
-        d=dynamic_fund_decisions(S,full_news)
-        st.dataframe(d.sort_values("机会分",ascending=False)[["基金","今日动作","建议金额","机会分","证据摘要","中长期定位"]],hide_index=True,use_container_width=True)
-    elif page=="🔄 资金轮动":
-        full_news=getnews("full")
-        render_rotation(sec,full_news,S)
-    elif page=="💸 我要取钱":
-        full_news=getnews("full")
-        render_withdraw_cash(S,full_news)
-    elif page=="💵 新钱去哪":
-        full_news=getnews("full")
-        render_new_money(sec,full_news,S)
-        st.markdown("### 全市场候选方向")
-        st.dataframe(opportunity_radar(sec,full_news,S),hide_index=True,use_container_width=True)
-    elif page=="🧭 未来1-6月策略":
-        full_news=getnews("full")
-        render_mid_long_strategy(S,full_news)
-    elif page=="🎯 今日建议":
-        render_dynamic_all_funds(S,news)
-        render_v32_decision_core(m,sec,news,S)
-        render_alert_center(S,news)
-        render_today_advice(m,sec,news,S)
-        st.subheader("今日关键风险")
-        risk_rows=pd.DataFrame([
-            ["美债10Y",S["tnx"],"高于4.6时压制科技估值，动态仓降低"],
-            ["VIX",S["vix"],"高于30时避免把大跌机械当便宜"],
-            ["纳指单日",S["nas"],"明显回撤才考虑机会档"],
-            ["CPO代理",S["cp"],"回撤+无重大政策利空时才提高"],
-            ["政策风险","触发" if S["policy_bad"] else "未触发","触发时CPO/建信动态仓收缩"]
-        ],columns=["观察项","当前","解释"])
-        st.dataframe(risk_rows,hide_index=True,use_container_width=True)
-        st.subheader("今日不要做")
-        st.warning("不追涨；不因为一条低可信新闻改变长期配置；不同时把CPO、半导体、海外AI三条高相关风险链一起打到机会档。")
-
-    elif page=="🏠 今日驾驶舱":
-        st.caption(f"{S['state']} ｜ 风险 {S['risk']}/100 ｜ 今日建议投入 ¥{S['total']} ｜ 新闻 {len(news)} 条 ｜ {now.strftime('%H:%M:%S')}")
-        render_alert_center(S,news)
-        render_today_advice(m,sec,news,S)
-        st.info(f"今日执行：固定核心继续定投；动态仓根据风险调整。当前建议合计 ¥{S['total']}。")
-        A,B=st.columns([1,1.4])
-        with A:
-            fig=go.Figure(go.Indicator(mode="gauge+number",value=S["risk"],title={"text":"市场风险温度"},gauge={"axis":{"range":[0,100]},"bar":{"thickness":.22},"steps":[{"range":[0,45]},{"range":[45,70]},{"range":[70,100]}]}))
-            fig.update_layout(height=185,margin=dict(l=5,r=5,t=34,b=2))
-            st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
-            x,y,z=st.columns(3);x.metric("VIX",f"{S['vix']:.1f}");y.metric("美债10Y",f"{S['tnx']:.2f}");z.metric("SOX",f"{S['sox']:+.2f}%")
-            st.subheader("今天不要做什么")
-            st.warning("不追涨单日大涨板块；不在高可信基本面利空下机械抄底；不动用未来定投资金凑满仓。")
-        with B:
-            st.subheader("📰 今日重点新闻")
-            render_news_cards(news.head(8) if not news.empty else news,8,"home")
-        st.subheader("🧭 新闻影响速览")
-        nit=news_impact_table(news)
-        if not nit.empty:
-            st.dataframe(nit.head(8),hide_index=True,use_container_width=True)
-        C,D=st.columns(2)
-        with C:
-            st.subheader("📊 板块涨跌")
-            show=sec.copy()
-            show["判断"]=show["涨跌"].apply(lambda x:"🔵 回撤关注" if pd.notna(x) and x<=-2 else "🟡 不追涨" if pd.notna(x) and x>=3 else "🟢 正常")
-            st.dataframe(show[["板块","涨跌","判断","核心成分"]],hide_index=True,use_container_width=True,height=360)
-        with D:
-            st.subheader("🔥 机会与风险")
-            opp=sec.dropna(subset=["涨跌"]).copy();opp["机会分"]=opp["涨跌"].apply(lambda x:85 if x<=-2 else 60 if x<1 else 50)
-            st.dataframe(opp.sort_values("机会分",ascending=False).head(5)[["板块","涨跌","机会分","核心成分"]],hide_index=True,use_container_width=True)
-            st.info(f"风险TOP：美债10Y {S['tnx']:.2f} / VIX {S['vix']:.1f} / 政策风险 {'触发' if S['policy_bad'] else '未触发'}")
-
-    elif page=="🧭 全市场机会雷达":
-        full_news=getnews("full")
-        render_opportunity_radar(sec,full_news,S)
-
-    elif page=="🛒 可买工具池":
-        full_news=getnews("full")
-        render_buyable_pool(sec,full_news,S)
-
-    elif page=="✅ 5/20/60日验证":
-        full_news=getnews("full")
-        render_validation(S,full_news)
-
-    elif page=="📈 市场看板":
-        cols=st.columns(3)
-        for i,(_,r) in enumerate(m.iterrows()):
-            if pd.notna(r["价格"]): cols[i%3].metric(r["市场"],f'{r["价格"]:.2f}',f'{r["涨跌"]:+.2f}%')
-            else: cols[i%3].metric(r["市场"],"暂不可用")
-        st.subheader("市场风险解释")
-        st.dataframe(pd.DataFrame([
-            ["VIX",S["vix"],"波动率","<20偏低，>30风险明显"],
-            ["美债10Y",S["tnx"],"科技估值压力",">=4.6时减少动态仓"],
-            ["SOX",S["sox"],"AI硬件风险偏好","观察半导体强弱"]
-        ],columns=["指标","当前","作用","规则"]),hide_index=True,use_container_width=True)
-
-    elif page=="▦ 板块中心":
-        chosen=st.selectbox("选择板块",list(BASKETS.keys()))
-        r=sec[sec["板块"]==chosen].iloc[0]
-        a,b,c=st.columns(3)
-        a.metric("代理涨跌","—" if pd.isna(r["涨跌"]) else f'{r["涨跌"]:+.2f}%')
-        b.metric("风险温度",f"{S['risk']}/100")
-        c.metric("状态","回撤关注" if pd.notna(r["涨跌"]) and r["涨跌"]<=-2 else "观察")
-        st.subheader("近1个月核心成分走势")
-        hist=sector_history(chosen)
-        if hist.empty:
-            st.caption("历史行情暂不可用")
-        else:
-            st.plotly_chart(px.line(hist,x="交易日序号",y="累计涨跌%",color="股票"),use_container_width=True)
-        st.subheader("核心成分"); st.write(r["核心成分"])
-        key="CPO" if "CPO" in chosen else "半导体" if "半导体" in chosen else chosen
-        rel=news[news["主题"].str.contains(key,na=False)] if not news.empty else pd.DataFrame()
-        st.subheader("相关新闻")
-        render_news_cards(rel,20,"sector")
-        if chosen=="CPO/光通信": st.info(f"基础 {rules['CPO基础']} 元；明显回撤且逻辑未坏 → {rules['CPO机会']} 元。")
-        elif chosen=="半导体设备": st.info(f"基础 {rules['半导体基础']} 元；机会档 {rules['半导体机会']} 元。")
-        else: st.caption("战术观察池，不自动挤占核心定投资金。")
-
-    elif page=="💼 基金中心":
-        chosen=st.selectbox("选择我的基金",PORT["基金"].tolist())
-        r=PORT[PORT["基金"]==chosen].iloc[0]
-        a,b,c,d=st.columns(4)
-        a.metric("当前金额",f'¥{r["金额"]:,.2f}'); b.metric("定位",r["定位"]); c.metric("主要暴露",r["主要暴露"]); d.metric("动作",r["动作"])
-        target=float(r.get("目标金额",0) or 0)
-        if target>0:
-            st.subheader("目标仓位进度")
-            st.progress(min(1,float(r["金额"])/target))
-            st.caption(f'当前 ¥{r["金额"]:.0f} / 目标 ¥{target:.0f}，剩余约 ¥{max(0,target-float(r["金额"])):.0f}')
-        if r["定位"]=="待迁移": st.warning("迁移仓：只减不加；优先转向纳指/建信。")
-        elif r["定位"]=="锁定": st.warning("锁定仓：未到可赎回日前不新增。")
-        else: st.info("按当前定位执行。")
-        keys=r["主要暴露"].replace("海外","").split("/")
-        rel=news[news["主题"].apply(lambda x:any(k and k.lower() in x.lower() for k in keys))] if not news.empty else pd.DataFrame()
-        if chosen in TOP_HOLDINGS:
-            st.subheader(f"已知重仓股 · {HOLDINGS_ASOF}")
-            hh=pd.DataFrame(TOP_HOLDINGS[chosen],columns=["重仓资产","权重%"])
-            st.dataframe(hh,hide_index=True,use_container_width=True,height=280)
-        st.subheader("相关新闻")
-        render_news_cards(rel,20,"fund")
-
-    elif page in ["⭐ 今日必看","🌍 全球宏观","🤖 AI/CPO","💾 半导体","🥇 黄金资源","🇨🇳 A股政策","🗞 全部权威资讯"]:
-        news=getnews("full")
-        render_personal_news(news,10)
-        if news.empty:
-            st.warning("新闻源暂不可用")
-        else:
-            # V38：资讯页默认只展示 A/B 权威来源；今日必看优先 A 级与高重要度。
-            news=news[news["可信度"].isin(["A","B"])].copy()
-            topic_map={
-                "🌍 全球宏观":["黄金/宏观","AI/算力"],
-                "🤖 AI/CPO":["AI/算力","CPO/光通信"],
-                "💾 半导体":["HBM/存储","半导体设备"],
-                "🥇 黄金资源":["黄金/宏观","有色/铜","能源/煤炭"],
-                "🇨🇳 A股政策":["A股政策","半导体设备","红利/央企","银行/保险"],
-            }
-            if page in topic_map:
-                news=news[news["主题"].isin(topic_map[page])]
-            if page=="⭐ 今日必看":
-                news=news.sort_values(["可信度","重要度","发布时间"],ascending=[True,False,False],na_position="last").head(12)
-                st.info("只保留权威来源与高价值事件；事实来自新闻源，‘影响判断’为工作台分析。没有重要消息时宁缺毋滥。")
-            st.metric("权威资讯库",f"{len(news)} 条")
-            a,b,c=st.columns(3)
-            topic=a.selectbox("主题",["全部"]+sorted(news["主题"].unique().tolist()))
-            grades=b.multiselect("可信度",["A","B"],default=["A","B"])
-            days=c.selectbox("时间范围",["全部","24小时","3天","7天"],index=2)
-            x=news.copy()
-            if topic!="全部": x=x[x["主题"]==topic]
-            x=x[x["可信度"].isin(grades)]
-            if days!="全部":
-                hours={"24小时":24,"3天":72,"7天":168}[days]
-                cutoff=datetime.now(TZ)-pd.Timedelta(hours=hours)
-                x=x[(x["发布时间"].isna())|(x["发布时间"]>=cutoff)]
-            col1,col2=st.columns(2)
-            with col1:
-                st.subheader("最新新闻")
-                render_news_cards(x.sort_values("发布时间",ascending=False,na_position="last"),30,"latest")
-            with col2:
-                st.subheader("重大新闻")
-                render_news_cards(x.sort_values(["重要度","分数"],ascending=[False,False]),30,"major")
-
-    elif page=="🔥 机会与风险":
-        L,R=st.columns(2)
-        with L:
-            st.subheader("🔥 机会 TOP5")
-            x=sec.dropna(subset=["涨跌"]).copy(); x["机会分"]=x["涨跌"].apply(lambda z:85 if z<=-2 else 65 if z<=0 else 50)
-            st.dataframe(x.sort_values("机会分",ascending=False).head(5)[["板块","涨跌","机会分","核心成分"]],hide_index=True,use_container_width=True)
-        with R:
-            st.subheader("🚨 风险 TOP5")
-            risks=pd.DataFrame([
-                ["美债收益率",S["tnx"],90 if S["tnx"]>=4.6 else 60],
-                ["VIX",S["vix"],90 if S["vix"]>=30 else 55],
-                ["政策风险","触发" if S["policy_bad"] else "未触发",95 if S["policy_bad"] else 30],
-                ["纳指单日",S["nas"],80 if S["nas"]<=-2.5 else 40],
-                ["CPO单日",S["cp"],80 if S["cp"]<=-3 else 40],
-            ],columns=["风险","当前","风险分"])
-            st.dataframe(risks.sort_values("风险分",ascending=False),hide_index=True,use_container_width=True)
-        st.subheader("🧯 下跌预案")
-        st.dataframe(pd.DataFrame([
-            ["纳指","≤-2.5%","AI逻辑正常+VIX可控",f"{rules['纳指基础']}→{rules['纳指机会']}"],
-            ["CPO","≤-2%","无重大政策利空",f"{rules['CPO基础']}→{rules['CPO机会']}"],
-            ["半导体","≤-2%","产业逻辑正常",f"{rules['半导体基础']}→{rules['半导体机会']}"],
-            ["基本面恶化","任何跌幅","高可信重大利空","不机械抄底"]
-        ],columns=["对象","触发","确认","动作"]),hide_index=True,use_container_width=True)
-
-    elif page=="🧠 决策大脑":
-        st.subheader("今天为什么这样买")
-        st.dataframe(decision_reason_cards(S),hide_index=True,use_container_width=True)
-        st.subheader("新闻对我的钱有什么影响")
-        nit=news_impact_table(news)
-        if nit.empty:
-            st.caption("暂无可用新闻影响数据")
-        else:
-            st.dataframe(nit,hide_index=True,use_container_width=True)
-        st.subheader("今天不该做什么")
-        stop=[]
-        if S["tnx"]>=4.6: stop.append("美债压力高：不要把纳指/建信直接打到满档。")
-        if S["vix"]>=30: stop.append("VIX偏高：不要把单日大跌机械当成便宜。")
-        if S["policy_bad"]: stop.append("存在高可信政策风险：CPO动态仓优先收缩。")
-        if not stop: stop.append("没有触发重大禁区，但仍不要追涨单日大涨板块。")
-        for x in stop: st.warning(x)
-        st.subheader("下一步触发器")
-        st.dataframe(pd.DataFrame([
-            ["纳指","跌到≤-2.5%且VIX<32、美债<4.6",f"提高到¥{rules['纳指机会']}"],
-            ["CPO","跌到≤-2%且无高可信政策利空",f"提高到¥{rules['CPO机会']}"],
-            ["半导体","跌到≤-2%且产业逻辑正常",f"提高到¥{rules['半导体机会']}"],
-            ["建信","纳指≤-2%、VIX<30、美债<4.6",f"提高到¥{rules['建信机会']}"],
-        ],columns=["对象","触发条件","动作"]),hide_index=True,use_container_width=True)
-
-    elif page=="📅 事件日历":
-        st.subheader("未来重要事件")
-        ev=pd.DataFrame(events)
-        if not ev.empty:
-            st.dataframe(ev,hide_index=True,use_container_width=True)
-        st.caption("日期为空的事件不会被工作台伪造；你可以在下面手动维护可靠日期。")
-        edited=st.data_editor(ev,use_container_width=True,hide_index=True,num_rows="dynamic")
-        if st.button("保存事件日历"):
-            save_json(EVENT_FILE,{"events":edited.to_dict("records")})
-            st.success("已保存事件日历")
-        st.subheader("事件影响规则")
-        st.dataframe(pd.DataFrame([
-            ["CPI/非农/FOMC","美债、纳指、黄金","重大事件前不提前打满动态仓"],
-            ["NVIDIA财报","纳指、建信、CPO","财报前控制机会仓，财报后再看订单/CapEx"],
-            ["出口管制","CPO、国产半导体","高可信确认后停止机械抄底"],
-        ],columns=["事件","主要影响","规则"]),hide_index=True,use_container_width=True)
-
-    elif page=="🔗 重合度分析":
-        tab1,tab2,tab3=st.tabs(["重仓股交集","权重重合度","风险暴露相似度"])
-        with tab1:
-            st.subheader(f"重仓股交集矩阵 · 数据截至 {HOLDINGS_ASOF}")
-            mat=true_holding_overlap()
-            if mat.empty:
-                st.caption("暂无可计算的重仓股数据")
-            else:
-                fig=px.imshow(mat,text_auto=True,aspect="auto",zmin=0,zmax=100)
-                fig.update_layout(height=560)
-                st.plotly_chart(fig,use_container_width=True)
-                st.info("这里按已知Top10重仓股名称交集计算，是真实持仓快照层面的重合，不代表全部持仓实时重合率。")
-        with tab2:
-            st.subheader("按重仓权重计算的重合度")
-            wmat=weighted_holding_overlap()
-            if wmat.empty:
-                st.caption("暂无可计算数据")
-            else:
-                fig=px.imshow(wmat,text_auto=True,aspect="auto",zmin=0,zmax=100)
-                fig.update_layout(height=560)
-                st.plotly_chart(fig,use_container_width=True)
-                st.info("使用已知重仓股权重计算：共同重仓越多、权重越接近，分数越高。比单纯看股票名称交集更有参考价值。")
-        with tab3:
-            st.subheader("风险暴露相似度")
-            mat=overlap_matrix()
-            fig=px.imshow(mat,text_auto=True,aspect="auto",zmin=0,zmax=100)
-            fig.update_layout(height=560)
-            st.plotly_chart(fig,use_container_width=True)
-            st.info("该矩阵按AI/半导体/CPO/存储等风险因子近似，用来观察风格相关性。")
-        st.subheader("组合结构提醒")
-        st.write("多只科技基金底层仍高度集中在AI硬件、半导体、存储与光通信链条；黄金承担主要低相关防守作用。")
-
-    elif page=="🧬 底层穿透":
-        st.subheader(f"基金底层持仓穿透 · 数据截至 {HOLDINGS_ASOF}")
-        raw2,agg2=aggregate_company_exposure()
-        if not agg2.empty:
-            a1,a2,a3,a4=st.columns(4)
-            a1.metric("可穿透基金",len([f for f in TOP_HOLDINGS if f in PORT["基金"].tolist()]))
-            a2.metric("底层资产",agg2["底层资产"].nunique())
-            a3.metric("重复资产",int((agg2["出现基金数"]>=2).sum()))
-            a4.metric("TOP1底层占比",f"{agg2.iloc[0]['占组合估算%']:.1f}%")
-            st.subheader("组合底层公司暴露 TOP20")
-            st.dataframe(agg2.head(20),hide_index=True,use_container_width=True)
-            alerts=exposure_alerts_from_holdings()
-            if alerts:
-                st.subheader("重复/集中提醒")
-                for t in alerts:
-                    st.warning(t)
-        raw,agg=aggregate_underlying()
-        if agg.empty:
-            st.caption("暂无可穿透数据")
-        else:
-            c1,c2,c3=st.columns(3)
-            c1.metric("可穿透基金数",len(TOP_HOLDINGS))
-            c2.metric("识别底层资产",agg["底层资产"].nunique())
-            c3.metric("多基金重复资产",int((agg["出现基金数"]>=2).sum()))
-            st.subheader("组合底层资产 TOP20")
-            st.dataframe(agg.head(20),hide_index=True,use_container_width=True)
-            fig=px.bar(agg.head(15).sort_values("估算金额"),x="估算金额",y="底层资产",orientation="h")
-            st.plotly_chart(fig,use_container_width=True)
-            repeated=agg[agg["出现基金数"]>=2].head(20)
-            st.subheader("重复暴露")
-            if repeated.empty:
-                st.caption("Top10快照中没有重复资产")
-            else:
-                st.dataframe(repeated,hide_index=True,use_container_width=True)
-            st.caption("估算金额 = 当前基金金额 × 季报重仓权重，仅用于看穿透方向，不等同于实时净值中的真实金额。")
-        chosen=st.selectbox("查看单只基金Top10",list(TOP_HOLDINGS.keys()))
-        h=pd.DataFrame(TOP_HOLDINGS[chosen],columns=["重仓资产","权重%"])
-        st.dataframe(h,hide_index=True,use_container_width=True)
-
-    elif page=="🧾 持仓穿透管理":
-        st.subheader("基金底层持仓管理")
-        st.caption("这里维护基金最新季报/披露的重仓股。更新后，重合度、底层穿透和集中度会自动使用新数据。")
-        st.info(f"当前数据日期：{HOLDINGS_ASOF}")
-
-        chosen=st.selectbox("选择基金",sorted(TOP_HOLDINGS.keys()),key="holdings_mgr_fund")
-        cur=pd.DataFrame(TOP_HOLDINGS.get(chosen,[]),columns=["重仓资产","权重%"])
-        edited=st.data_editor(cur,hide_index=True,use_container_width=True,num_rows="dynamic",key="holdings_editor")
-
-        c1,c2=st.columns([1,1])
-        with c1:
-            asof=st.text_input("数据日期/季度",value=str(HOLDINGS_ASOF),placeholder="例如 2026Q3")
-        with c2:
-            st.metric("当前Top权重合计",f"{pd.to_numeric(edited['权重%'],errors='coerce').fillna(0).sum():.1f}%")
-
-        if st.button("保存这只基金的底层持仓",use_container_width=True):
-            clean=[]
-            for _,r in edited.iterrows():
-                name=str(r.get("重仓资产","")).strip()
-                try:w=float(r.get("权重%",0))
-                except:w=0
-                if name and w>0:
-                    clean.append((name,w))
-            store=dict(TOP_HOLDINGS)
-            store[chosen]=clean
-            save_holdings_store(store,asof)
-            st.success("已保存。重新刷新后，穿透/重合度会使用新数据。")
-
-        st.markdown("---")
-        st.subheader("批量导入 / 导出")
-        template_rows=[]
-        for fund,hs in TOP_HOLDINGS.items():
-            for name,w in hs:
-                template_rows.append([fund,name,w,HOLDINGS_ASOF])
-        export_df=pd.DataFrame(template_rows,columns=["基金","重仓资产","权重%","数据日期"])
-        st.download_button(
-            "下载当前底层持仓 CSV",
-            export_df.to_csv(index=False).encode("utf-8-sig"),
-            "fund_holdings.csv","text/csv",use_container_width=True
-        )
-        uploaded=st.file_uploader("上传底层持仓CSV",type=["csv"],key="holdings_csv_upload")
-        if uploaded is not None:
-            try:
-                up=pd.read_csv(uploaded)
-                st.dataframe(up.head(30),hide_index=True,use_container_width=True)
-                required={"基金","重仓资产","权重%"}
-                if required.issubset(set(up.columns)):
-                    if st.button("确认导入底层持仓",use_container_width=True):
-                        store={}
-                        for fund,g in up.groupby("基金"):
-                            rows=[]
-                            for _,r in g.iterrows():
-                                try:w=float(r["权重%"])
-                                except:w=0
-                                name=str(r["重仓资产"]).strip()
-                                if name and w>0: rows.append((name,w))
-                            if rows: store[str(fund)]=rows
-                        d=str(up["数据日期"].dropna().iloc[0]) if "数据日期" in up.columns and len(up["数据日期"].dropna()) else datetime.now(TZ).strftime("%Y-%m-%d")
-                        save_holdings_store(store,d)
-                        st.success("导入成功，刷新页面后生效。")
-                else:
-                    st.error("CSV至少需要：基金、重仓资产、权重% 三列。")
-            except Exception as e:
-                st.error(f"读取CSV失败：{e}")
-
-    elif page=="🎯 仓位目标":
-        st.subheader("当前组合风险桶")
-        exp=portfolio_exposure_view()
-        a,b=st.columns([1,1])
-        with a:
-            st.dataframe(exp,hide_index=True,use_container_width=True)
-        with b:
-            st.plotly_chart(px.pie(exp,names="风险桶",values="金额",hole=.48),use_container_width=True)
-        st.subheader("仓位管理清单")
-        x=PORT[["基金","金额","定位","动作","目标金额"]].copy()
-        x["目标进度%"]=x.apply(lambda r: round(r["金额"]/r["目标金额"]*100,1) if pd.notna(r["目标金额"]) and r["目标金额"]>0 else None,axis=1)
-        st.dataframe(x,hide_index=True,use_container_width=True)
-        st.subheader("结构性提醒")
-        tech=float(exp[~exp["风险桶"].isin(["黄金","越南","其他","锁定A股"])]["金额"].sum())
-        total=float(exp["金额"].sum())
-        tech_pct=tech/total*100 if total else 0
-        st.metric("科技/成长相关仓估算占比",f"{tech_pct:.1f}%")
-        if tech_pct>=70:
-            st.warning("科技成长相关暴露较高。新增资金优先考虑不要继续重复堆叠同一条AI硬件风险链。")
-        else:
-            st.info("当前科技成长暴露尚未触发本页70%的高集中提醒。")
-
-    elif page=="🛰 数据健康":
-        hist_file=os.path.join(DATA_DIR,"decision_history.jsonl")
-        if os.path.exists(hist_file):
-            with open(hist_file,"rb") as f:
-                st.download_button("下载决策历史 JSONL",f.read(),"decision_history.jsonl","application/json",use_container_width=True)
-        st.subheader("稳定性与云端持久化")
-        kv_ok=cloud_table_exists("dashboard_kv")
-        dh_ok=cloud_table_exists("decision_history")
-        q1,q2,q3,q4=st.columns(4)
-        q1.metric("Supabase","已连接" if CLOUD else "未连接")
-        q2.metric("设置云端","正常" if kv_ok else "待升级")
-        q3.metric("决策历史云端","正常" if dh_ok else "待升级")
-        q4.metric("自动刷新","5分钟")
-        if CLOUD and kv_ok and dh_ok:
-            st.success("持仓、规则、预算、事件、底层穿透数据和决策历史具备云端持久化能力。重新部署后可恢复。")
-        elif CLOUD:
-            st.warning("Supabase 已连接，但 V34 的两个新表还没有建立。请运行压缩包中的 supabase_v34_upgrade.sql；不运行也能继续使用，只是部分新数据仍以本地文件为后备。")
-        else:
-            st.warning("当前未连接 Supabase，工作台仍可运行，但本地文件不能视为永久存储。")
-        st.caption("Streamlit Community Cloud 休眠属于托管平台行为；V34不能禁止休眠，但已减少唤醒后的网络阻塞和iPad频繁重绘。")
-
-        st.subheader("数据源健康检查")
-        health=data_health_table(m,sec,news)
-        st.dataframe(health,hide_index=True,use_container_width=True)
-        ok=(health["状态"].str.contains("正常")).sum()
-        a,b,c=st.columns(3)
-        a.metric("正常模块",f"{ok}/{len(health)}")
-        b.metric("新闻数量",len(news) if news is not None else 0)
-        c.metric("持仓快照",HOLDINGS_ASOF)
-        st.subheader("刷新与数据边界")
-        st.info("页面300秒轻量自动刷新；行情缓存60秒；板块180秒；新闻600秒。基金持仓不是实时数据，按季报快照展示。板块涨跌是核心成分代理，不冒充官方行业指数。")
-        st.info("V34优先使用Supabase保存关键设置与决策历史；本地文件继续作为断网/迁移时的后备。交易持仓仍沿用原有portfolio与investment_logs云端表。")
-        st.subheader("一键备份")
-        st.download_button("下载全部工作台数据备份 ZIP",export_backup_bytes(),"ruanying_dashboard_backup.zip","application/zip",use_container_width=True)
-        st.caption("备份包含已存在的投资日志、持仓、持仓快照、规则、预算和事件日历。")
-
-    elif page=="💰 资金计划":
-        newbudget=st.number_input("本月最大投资预算",min_value=0,value=int(budget["月预算"]),step=500)
-        if st.button("保存月预算"): save_json(BUDGET_FILE,{"月预算":newbudget}); st.success("已保存")
-        spent=0
-        if os.path.exists(LOG_FILE):
-            try:
-                lg=pd.read_csv(LOG_FILE); lg["日期"]=pd.to_datetime(lg["日期"]); now=datetime.now(TZ)
-                this=lg[(lg["日期"].dt.year==now.year)&(lg["日期"].dt.month==now.month)]
-                cols=[c for c in this.columns if c.startswith("实际_")]; spent=float(this[cols].sum().sum()) if cols else 0
-            except: pass
-        rem=max(0,newbudget-spent)
-        a,b,c=st.columns(3); a.metric("月预算",f"¥{newbudget:,.0f}"); b.metric("已记录投入",f"¥{spent:,.0f}"); c.metric("剩余预算",f"¥{rem:,.0f}")
-        st.progress(min(1,spent/newbudget) if newbudget else 0)
-        daily=max(1,S["total"]); st.caption(f"按今天 ¥{S['total']} 的节奏，剩余预算理论上可支持约 {int(rem/daily)} 个交易日。")
-        amount=st.select_slider("额外资金",options=[0,500,1000,2000,5000],value=500)
-        cash=.55 if S["risk"]>=70 else .4
-        if amount:
-            w={"纳指":.20,"CPO":.15,"半导体":.10,"其他机会":max(0,1-cash-.45),"现金":cash}
-            al=pd.DataFrame(w.items(),columns=["去向","比例"]); al["金额"]=(al["比例"]*amount).round(-1).astype(int)
-            st.dataframe(al[["去向","金额"]],hide_index=True,use_container_width=True)
-
-    elif page=="🩺 组合体检":
-        st.subheader("真实持仓权重")
-        pw=portfolio_weights()
-        pshow=pw[["基金","金额","定位","主要暴露","权重"]].copy()
-        pshow["权重"]=pshow["权重"].map(lambda x:f"{x:.1%}")
-        st.dataframe(pshow,hide_index=True,use_container_width=True)
-        render_alert_center(S,news)
-        exp=portfolio_exposure_view()
-        total=float(PORT["金额"].sum())
-        gold=float(PORT.loc[PORT["基金"]=="华安黄金ETF联接C","金额"].sum())
-        pending=float(PORT.loc[PORT["定位"].isin(["待迁移","锁定","待评估"]),"金额"].sum())
-        gold_score=min(100,round((gold/total*100)*4)) if total else 0
-        pending_score=max(0,100-round(pending/total*100*2)) if total else 0
-        a,b,c,d=st.columns(4)
-        a.metric("科技集中度","高" if total and (1-gold/total)>0.75 else "中")
-        b.metric("基金数量",len(PORT))
-        c.metric("黄金防守",f"{gold_score}/100")
-        d.metric("可管理性",f"{pending_score}/100")
-        ex=pd.DataFrame([["AI/半导体",29],["CPO/光通信",18],["黄金",15],["海外科技",17],["其他/待迁移",19],["越南",2]],columns=["行业","占比"])
-        L,R=st.columns(2); L.plotly_chart(px.pie(ex,names="行业",values="占比",hole=.5),use_container_width=True)
-        with R:
-            st.warning("主要问题：多只基金底层集中在 AI硬件、半导体和光通信。")
-            st.dataframe(PORT[PORT["定位"].isin(["待迁移","接近封顶","锁定","待评估"])][["基金","定位","动作"]],hide_index=True,use_container_width=True)
-        st.subheader("全部持仓")
-        st.dataframe(PORT,hide_index=True,use_container_width=True)
-
-    elif page=="📒 投资日志":
-        st.subheader("今日基金交易记录")
-        st.caption("每只基金都可以单独加仓、减仓或不操作；保存后会自动更新持仓。")
-
-        tx_rows=[]
-        for i,(_,pr) in enumerate(PORT.iterrows()):
-            fund=str(pr["基金"])
-            current=float(pr["金额"]) if pd.notna(pr["金额"]) else 0.0
-            with st.container(border=True):
-                c1,c2,c3=st.columns([1.7,1,1])
-                with c1:
-                    st.markdown(f"**{fund}**")
-                    st.caption(f"当前持仓：¥{current:,.2f} ｜ {pr['定位']}")
-                with c2:
-                    action=st.selectbox("操作",["不操作","加仓","减仓"],key=f"tx_action_{i}",label_visibility="collapsed")
-                with c3:
-                    amount=st.number_input("金额",min_value=0.0,value=0.0,step=10.0,key=f"tx_amount_{i}",label_visibility="collapsed")
-                note=st.text_input("备注",placeholder="例如：回撤加仓 / 止盈 / 调仓 / 今天不动",key=f"tx_note_{i}")
-
-                delta=0.0
-                if action=="加仓":
-                    delta=float(amount)
-                elif action=="减仓":
-                    delta=-float(amount)
-
-                new_amount=max(0.0,current+delta)
-                if action!="不操作" and amount>0:
-                    st.caption(f"保存后持仓：¥{new_amount:,.2f}")
-                    tx_rows.append({
-                        "基金":fund,"操作":action,"金额":float(amount),"变动":delta,
-                        "原持仓":current,"新持仓":new_amount,"备注":note
-                    })
-
-        common_note=st.text_area("今日总备注",placeholder="可选：记录今天整体判断。",key="today_common_note")
-
-        if st.button("💾 保存今日投资记录",use_container_width=True):
-            if not tx_rows:
-                st.warning("今天还没有填写任何加仓或减仓。")
-            else:
-                now_dt=datetime.now(TZ)
-                batch_id=now_dt.strftime("%Y%m%d%H%M%S")
-                new_port=PORT.copy()
-
-                for tx in tx_rows:
-                    idxs=new_port.index[new_port["基金"]==tx["基金"]]
-                    if len(idxs):
-                        new_port.loc[idxs[0],"金额"]=tx["新持仓"]
-
-                save_port(new_port)
-
-                local_rows=[]
-                for tx in tx_rows:
-                    local_rows.append({
-                        "记录ID":f"{batch_id}-{tx['基金']}",
-                        "日期":now_dt.strftime("%Y-%m-%d %H:%M"),
-                        "基金":tx["基金"],
-                        "操作":tx["操作"],
-                        "交易金额":tx["金额"],
-                        "持仓变动":tx["变动"],
-                        "交易前持仓":tx["原持仓"],
-                        "交易后持仓":tx["新持仓"],
-                        "备注":tx["备注"],
-                        "今日总备注":common_note,
-                        "市场状态":S["state"]
-                    })
-
-                tx_file=os.path.join(DATA_DIR,"fund_transactions.csv")
-                pd.DataFrame(local_rows).to_csv(
-                    tx_file,mode="a",header=not os.path.exists(tx_file),
-                    index=False,encoding="utf-8-sig"
-                )
-
-                if CLOUD:
-                    cloud_rows=[]
-                    for tx in tx_rows:
-                        cloud_rows.append({
-                            "log_date":now_dt.strftime("%Y-%m-%d"),
-                            "fund_name":tx["基金"],
-                            "suggested_amount":0,
-                            "actual_amount":tx["变动"],
-                            "note":f"{tx['操作']} ¥{tx['金额']:.2f}｜{tx['备注']}｜{common_note}".strip("｜")
-                        })
-                    cloud_insert("investment_logs",cloud_rows)
-                    cloud_insert("portfolio_snapshots",[
-                        {"snapshot_time":now_dt.isoformat(),"fund_name":str(r["基金"]),"amount":float(r["金额"])}
-                        for _,r in new_port.iterrows()
-                    ])
-
-                # 同时保存“当时为什么这么做”，供未来5/10/20日复盘
-                try:
-                    decision_file=os.path.join(DATA_DIR,"decision_history.jsonl")
-                    snap={
-                        "time":now_dt.isoformat(),
-                        "market_state":S["state"],
-                        "risk":S["risk"],
-                        "vix":S["vix"],
-                        "us10y":S["tnx"],
-                        "nasdaq_change":S["nas"],
-                        "cpo_proxy":S["cp"],
-                        "semi_proxy":S["sp"],
-                        "plan_total":S["total"],
-                        "trades":tx_rows
-                    }
-                    with open(decision_file,"a",encoding="utf-8") as f:
-                        f.write(json.dumps(snap,ensure_ascii=False)+"\n")
-                    cloud_decision_insert(snap)
-                except Exception:
-                    pass
-                st.success(f"已保存 {len(tx_rows)} 笔交易，并自动更新持仓；同时保存了当时的决策环境。")
-                st.rerun()
-
-        st.markdown("---")
-        st.subheader("历史投资记录")
-
-        tx_file=os.path.join(DATA_DIR,"fund_transactions.csv")
-        local_tx=pd.DataFrame()
-        if os.path.exists(tx_file):
-            try:
-                local_tx=pd.read_csv(tx_file)
-            except Exception:
-                local_tx=pd.DataFrame()
-
-        cloud_tx=pd.DataFrame()
-        if CLOUD:
-            try:
-                cr=cloud_select("investment_logs")
-                if cr:
-                    cloud_tx=pd.DataFrame(cr)
-            except Exception:
-                pass
-
-        tab1,tab2=st.tabs(["新版逐基金记录","云端历史记录"])
-
-        with tab1:
-            if local_tx.empty:
-                st.caption("还没有新版逐基金交易记录。")
-            else:
-                show=local_tx.iloc[::-1].reset_index(drop=True)
-                st.dataframe(show,hide_index=True,use_container_width=True,height=360)
-
-                st.subheader("删除记录")
-                options=[]
-                for idx,row in show.iterrows():
-                    label=f"{idx+1}. {row.get('日期','')}｜{row.get('基金','')}｜{row.get('操作','')} ¥{row.get('交易金额',0)}｜{row.get('备注','')}"
-                    options.append((label,str(row.get("记录ID",""))))
-
-                selected=st.multiselect("选择要删除的记录",[x[0] for x in options],placeholder="可一次选择多条")
-                if st.button("🗑️ 删除选中记录",type="secondary",use_container_width=True):
-                    if not selected:
-                        st.warning("请先选择要删除的记录。")
-                    else:
-                        ids={rid for label,rid in options if label in selected}
-                        remain=local_tx[~local_tx["记录ID"].astype(str).isin(ids)].copy()
-                        remain.to_csv(tx_file,index=False,encoding="utf-8-sig")
-                        st.success(f"已删除 {len(ids)} 条记录。")
-                        st.rerun()
-
-                st.download_button(
-                    "下载逐基金交易记录 CSV",
-                    local_tx.to_csv(index=False).encode("utf-8-sig"),
-                    "fund_transactions.csv","text/csv",
-                    use_container_width=True
-                )
-
-        with tab2:
-            if cloud_tx.empty:
-                st.caption("暂无云端历史记录，或当前没有读取权限。")
-            else:
-                rename_map={
-                    "id":"ID","log_date":"日期","fund_name":"基金",
-                    "suggested_amount":"建议金额","actual_amount":"实际变动",
-                    "note":"备注","created_at":"创建时间"
-                }
-                cshow=cloud_tx.rename(columns=rename_map)
-                cols=[c for c in ["ID","日期","基金","实际变动","备注","创建时间"] if c in cshow.columns]
-                st.dataframe(cshow[cols].sort_values("ID",ascending=False),hide_index=True,use_container_width=True,height=360)
-
-                if "ID" in cshow.columns:
-                    delete_ids=st.multiselect("选择要从云端删除的记录 ID",cshow["ID"].astype(int).tolist(),key="cloud_delete_ids")
-                    if st.button("🗑️ 删除云端选中记录",use_container_width=True):
-                        if not delete_ids:
-                            st.warning("请先选择记录 ID。")
-                        elif cloud_delete_ids("investment_logs",delete_ids):
-                            st.success("已删除选中的云端记录。")
-                            st.rerun()
-                        else:
-                            st.error("云端删除失败，可能是 RLS 权限限制。")
-
-        st.info("删除历史记录不会自动撤销已经发生的持仓变化；如果交易填错，请同时到“持仓管理”修正当前持仓。")
-
-    elif page=="☁️ 云端同步":
-        st.subheader("云端同步状态")
-        a,b,c=st.columns(3)
-        a.metric("Supabase","已连接" if CLOUD else "未连接")
-        b.metric("当前持仓",len(PORT))
-        c.metric("云端快照",len(cloud_select("portfolio_snapshots")) if CLOUD else 0)
-        if CLOUD:
-            if "SUPABASE_SERVICE_KEY" in st.secrets:
-                st.success("已使用服务端密钥连接 Supabase，可跨设备持久化保存。")
-            else:
-                st.info("已使用 Publishable Key 连接；由于 RLS 已开启，写入可能被数据库拒绝。")
-            if st.button("把当前持仓同步到云端",use_container_width=True):
-                save_port(PORT);st.success("已发起同步")
-        else:
-            st.warning("没有读取到 SUPABASE_URL / SUPABASE_KEY。")
-        st.info("手机、iPad、电脑访问同一个网址时，云端数据会保持一致。")
-
-    elif page=="🧾 持仓管理":
-        st.subheader("编辑当前持仓")
-        edited=st.data_editor(PORT,use_container_width=True,hide_index=True,num_rows="dynamic")
-        if st.button("保存持仓修改"):
-            save_port(edited)
-            save_snapshot(edited)
-            if CLOUD:
-                cloud_insert("portfolio_snapshots",[{"snapshot_time":datetime.now(TZ).isoformat(),"fund_name":str(r["基金"]),"amount":float(r["金额"])} for _,r in edited.iterrows()])
-            st.success("已保存；云端连接正常时会同步到其他设备")
-        st.download_button("下载持仓备份 CSV",edited.to_csv(index=False).encode("utf-8-sig"),"portfolio_backup.csv","text/csv")
-        uploaded=st.file_uploader("恢复持仓备份",type=["csv"])
-        if uploaded is not None:
-            up=pd.read_csv(uploaded)
-            st.dataframe(up,use_container_width=True)
-            if st.button("确认恢复这份持仓"):
-                save_port(up); st.success("已恢复，刷新页面后生效")
-        if os.path.exists(SNAPSHOT_FILE):
-            st.subheader("持仓变化记录")
-            snap=pd.read_csv(SNAPSHOT_FILE)
-            st.dataframe(snap.tail(40),hide_index=True,use_container_width=True)
-
-    elif page=="⚙️ 投资规则":
-        edited={}
-        for k,v0 in rules.items():
-            edited[k]=st.number_input(k,min_value=0,max_value=500,value=int(v0),step=10,key="rr"+k)
-        if st.button("保存投资规则"): save_json(RULE_FILE,edited); st.success("已保存。")
-        st.info("核心原则：价格下跌 ≠ 自动抄底。只有回撤 + 基本面未明显恶化，才进入机会档。")
-
 render(page)
-st.caption("V39 · 信息架构精简版｜全持仓动态决策｜跨板块轮动｜资金调度｜5/20/60日验证框架")
+st.caption("V40 · 全球市场终端版｜全球重要资讯排序｜全市场状态条｜今日四段式决策｜旧页面分支已清理")
