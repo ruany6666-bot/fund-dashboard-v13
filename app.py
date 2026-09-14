@@ -1,7 +1,7 @@
 
 import streamlit as st
 import pandas as pd
-import requests, feedparser, json, os, re, io
+import requests, feedparser, json, os, re, io, hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote
 from datetime import datetime
@@ -10,7 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client
 
-st.set_page_config(page_title="阮嘤基金投资工作台 V40", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="阮嘤基金投资工作台 V44", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 HEADERS={"User-Agent":"Mozilla/5.0"}
 TZ=ZoneInfo("Asia/Shanghai")
@@ -22,6 +22,10 @@ PORT_FILE=os.path.join(DATA_DIR,"portfolio.csv")
 SNAPSHOT_FILE=os.path.join(DATA_DIR,"portfolio_snapshots.csv")
 EVENT_FILE=os.path.join(DATA_DIR,"event_calendar.json")
 HOLDINGS_FILE=os.path.join(DATA_DIR,"fund_holdings.json")
+V43_COST_FILE=os.path.join(DATA_DIR,"v43_cost_basis.json")
+V43_HISTORY_KEY="v43_decision_history"
+V44_NEWS_FILE=os.path.join(DATA_DIR,"v44_news_validation.json")
+V44_NEWS_HISTORY_KEY="v44_news_validation"
 
 
 st.markdown("""
@@ -308,6 +312,150 @@ def cloud_kv_set(key,value):
         return True
     except Exception:
         return False
+
+def _local_json_load(path, default):
+    try:
+        if os.path.exists(path):
+            with open(path,"r",encoding="utf-8") as f:return json.load(f)
+    except Exception:pass
+    return default
+
+def _local_json_save(path, value):
+    try:
+        with open(path,"w",encoding="utf-8") as f:json.dump(value,f,ensure_ascii=False,indent=2)
+        return True
+    except Exception:return False
+
+def get_cost_basis_map():
+    cloud=cloud_kv_get("v43_cost_basis")
+    if isinstance(cloud,dict):return cloud
+    local=_local_json_load(V43_COST_FILE,{})
+    return local if isinstance(local,dict) else {}
+
+def save_cost_basis_map(value):
+    _local_json_save(V43_COST_FILE,value)
+    cloud_kv_set("v43_cost_basis",value)
+
+def get_v43_history():
+    merged={}
+    cloud=cloud_kv_get(V43_HISTORY_KEY)
+    if isinstance(cloud,list):
+        for x in cloud:
+            if isinstance(x,dict) and x.get("date"):merged[x["date"]]=x
+    try:
+        if os.path.exists(V37_DECISION_FILE):
+            with open(V37_DECISION_FILE,"r",encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        x=json.loads(line)
+                        if x.get("date"):merged[x["date"]]=x
+    except Exception:pass
+    return [merged[k] for k in sorted(merged)]
+
+def save_v43_history_item(payload):
+    hist=get_v43_history()
+    bydate={x.get("date"):x for x in hist if x.get("date")}
+    bydate[payload.get("date")]=payload
+    out=[bydate[k] for k in sorted(bydate)][-400:]
+    cloud_kv_set(V43_HISTORY_KEY,out)
+    return out
+
+def _news_event_key(title):
+    base=clean_news_title(title).lower()
+    base=re.sub(r"[^0-9a-z\u4e00-\u9fff]+"," ",base)
+    base=re.sub(r"\s+"," ",base).strip()
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
+
+def get_v44_news_history():
+    cloud=cloud_kv_get(V44_NEWS_HISTORY_KEY)
+    if isinstance(cloud,list): return cloud
+    local=_local_json_load(V44_NEWS_FILE,[])
+    return local if isinstance(local,list) else []
+
+def save_v44_news_history(value):
+    value=value[-350:]
+    _local_json_save(V44_NEWS_FILE,value)
+    cloud_kv_set(V44_NEWS_HISTORY_KEY,value)
+    return value
+
+def _proxy_close(symbol):
+    try:
+        p,_,_=yahoo(symbol,"1mo")
+        return float(p) if p is not None else None
+    except Exception:return None
+
+def update_news_validation_history(df):
+    """每天为高价值新闻留一个市场快照；后续按首次记录后的1/3/5天做真实事后验证。"""
+    if df is None or df.empty:return []
+    hist=get_v44_news_history(); by={x.get("key"):x for x in hist if isinstance(x,dict) and x.get("key")}
+    today=datetime.now(TZ).strftime("%Y-%m-%d")
+    top=rank_global_news(df)
+    top=top[(top["可信度"].isin(["A","B"])) & (top["全球重要分"]>=60)].head(18)
+    for _,r in top.iterrows():
+        key=_news_event_key(r.get("新闻","")); topic=r.get("主题","其他")
+        if not key:continue
+        ev=by.get(key) or {"key":key,"title":r.get("新闻",""),"topic":topic,"source":r.get("来源",""),
+                            "score":int(r.get("全球重要分",0) or 0),"sentiment":int(r.get("分数",50) or 50),
+                            "first_seen":today,"observations":[]}
+        obs=ev.setdefault("observations",[])
+        if not any(o.get("date")==today for o in obs):
+            prices={}
+            for label,symbol,_ in TOPIC_PROXY.get(topic,[]):
+                prices[label]=_proxy_close(symbol)
+            obs.append({"date":today,"prices":prices})
+        ev["last_seen"]=today; ev["score"]=max(int(ev.get("score",0)),int(r.get("全球重要分",0) or 0))
+        by[key]=ev
+    out=sorted(by.values(),key=lambda x:(x.get("last_seen",""),x.get("score",0)))[-350:]
+    return save_v44_news_history(out)
+
+def _event_horizon_returns(ev):
+    obs=ev.get("observations",[]) or []
+    if not obs:return {}
+    try: base_date=pd.Timestamp(obs[0]["date"])
+    except Exception:return {}
+    base_prices=obs[0].get("prices",{}) or {}; out={}
+    for horizon in [1,3,5]:
+        candidates=[]
+        for o in obs[1:]:
+            try: days=(pd.Timestamp(o["date"])-base_date).days
+            except Exception:continue
+            if days>=horizon:candidates.append((days,o))
+        if not candidates:continue
+        _,o=min(candidates,key=lambda z:z[0])
+        vals=[]
+        for label,p0 in base_prices.items():
+            p1=(o.get("prices",{}) or {}).get(label)
+            if p0 and p1: vals.append((label,(p1/p0-1)*100))
+        if vals:out[horizon]=vals
+    return out
+
+def render_news_validation_ledger(df):
+    hist=update_news_validation_history(df)
+    if not hist:return
+    rows=[]
+    for ev in sorted(hist,key=lambda x:(x.get("last_seen",""),x.get("score",0)),reverse=True):
+        hrs=_event_horizon_returns(ev)
+        if not hrs:continue
+        def fmt(h):
+            vals=hrs.get(h,[])
+            return "—" if not vals else " / ".join(f"{n} {v:+.1f}%" for n,v in vals)
+        rows.append({"新闻":ev.get("title",""),"主题":ev.get("topic",""),"首次记录":ev.get("first_seen",""),
+                     "1日后":fmt(1),"3日后":fmt(3),"5日后":fmt(5)})
+        if len(rows)>=12:break
+    if rows:
+        st.markdown("### 新闻事后验证")
+        st.caption("以工作台首次记录新闻时的代理资产收盘价为基准，随后按1/3/5天留痕；这是事后验证，不是当前滚动涨跌。")
+        st.dataframe(pd.DataFrame(rows),hide_index=True,use_container_width=True)
+
+def portfolio_cost_state():
+    mp=get_cost_basis_map(); rows=[]
+    for _,r in PORT.iterrows():
+        name=r["基金"]; mv=float(r["金额"]); rec=mp.get(name,{}) if isinstance(mp,dict) else {}
+        invested=float(rec.get("累计投入",0) or 0)
+        pnl=mv-invested if invested>0 else None
+        ret=(pnl/invested*100) if invested>0 else None
+        rows.append({"基金":name,"当前市值":mv,"累计投入":invested,"累计盈亏":pnl,"累计收益率%":ret})
+    return pd.DataFrame(rows)
 
 def cloud_decision_insert(payload):
     if not CLOUD:return False
@@ -810,7 +958,7 @@ m,sec,news,S=compute()
 
 with st.sidebar:
     st.markdown("## 📊 阮嘤基金")
-    st.caption("V40 · 全球市场终端版")
+    st.caption("V44 · 情报闭环增强版")
     page=st.radio("功能导航",[
         "🎯 今日决策","📰 市场资讯","📊 市场研究","💼 组合分析","⚙️ 资金与管理"
     ],label_visibility="collapsed")
@@ -824,6 +972,166 @@ with st.sidebar:
     st.caption("新闻库：" + (f"🟢 {len(news)} 条" if not news.empty else "🔴 暂不可用"))
     st.caption("云端同步：" + ("🟢 已连接" if CLOUD else "🟠 未连接"))
 
+def news_priority(score):
+    try: score=int(score)
+    except Exception: score=0
+    if score>=82:return "🔴 必须知道"
+    if score>=68:return "🟠 重要"
+    return "🟡 值得关注"
+
+def news_age_hours(dt):
+    if pd.isna(dt): return 9999
+    try:return max(0,(datetime.now(TZ)-dt).total_seconds()/3600)
+    except Exception:return 9999
+
+def dedupe_news_events(df):
+    """轻量事件去重：同主题+标题核心词高度重合只保留权威/重要分更高的一条。"""
+    if df is None or df.empty:return df
+    x=rank_global_news(df).copy()
+    kept=[]; sigs=[]
+    stop={"the","a","an","of","to","in","on","for","and","with","says","after","as","at","from","new","最新","报道","消息","宣布","表示"}
+    for idx,r in x.iterrows():
+        words=set(re.findall(r"[a-zA-Z]{3,}|[\u4e00-\u9fff]{2,}",str(r.get("新闻","" )).lower()))-stop
+        duplicate=False
+        for topic,old in sigs:
+            if topic!=r.get("主题"):continue
+            union=len(words|old); inter=len(words&old)
+            if union and inter/union>=0.48:
+                duplicate=True;break
+        if not duplicate:
+            kept.append(idx);sigs.append((r.get("主题"),words))
+    return x.loc[kept]
+
+OFFICIAL_HINTS=[
+    "federalreserve.gov","bls.gov","bea.gov","treasury.gov","sec.gov","csrc.gov.cn","pbc.gov.cn",
+    "ecb.europa.eu","boj.or.jp","bankofengland.co.uk","imf.org","worldbank.org","iea.org","opec.org","wto.org",
+    "上交所","深交所","港交所","中国人民银行","证监会","federal reserve","european central bank","bank of japan"
+]
+
+def source_type_label(source):
+    lo=str(source).lower()
+    if any(x in lo for x in OFFICIAL_HINTS): return "🏛️ 一手官方"
+    if any(x in lo for x in ["reuters","路透","associated press","ap news"]): return "📰 权威通讯社"
+    if any(x in lo for x in ["bloomberg","彭博","financial times","cnbc"]): return "🗞️ 主流财经媒体"
+    return "🔎 来源待复核"
+
+def market_reaction_text(topic):
+    """把新闻叙事和真实行情放在一起，避免只看标题做判断。"""
+    try:
+        parts=[]
+        def mm(name,label=None):
+            x=m[m["市场"]==name]
+            if len(x) and pd.notna(x.iloc[0]["涨跌"]):
+                parts.append(f"{label or name} {float(x.iloc[0]['涨跌']):+.2f}%")
+        def ss(name,label=None):
+            x=sec[sec["板块"]==name]
+            if len(x) and pd.notna(x.iloc[0]["涨跌"]):
+                parts.append(f"{label or name} {float(x.iloc[0]['涨跌']):+.2f}%")
+        if topic in ["美股宏观","全球央行","全球经济","全球政治","贸易政策"]:
+            mm("纳斯达克","纳指"); mm("美债10Y","美债10Y"); mm("美元指数","美元"); mm("VIX","VIX")
+        elif topic in ["地缘政治","能源/煤炭"]:
+            mm("Brent原油","Brent"); mm("黄金","黄金"); mm("VIX","VIX")
+        elif topic in ["黄金/宏观"]:
+            mm("黄金","黄金"); mm("美元指数","美元"); mm("美债10Y","美债10Y")
+        elif topic in ["有色/铜"]:
+            mm("铜","铜"); mm("美元指数","美元")
+        elif topic in ["AI/算力","HBM/存储","全球公司/财报"]:
+            mm("纳斯达克","纳指"); mm("SOX","SOX")
+        elif topic=="CPO/光通信":
+            ss("CPO/光通信"); mm("纳斯达克","纳指")
+        elif topic=="半导体设备":
+            ss("半导体设备"); mm("上证","上证")
+        elif topic=="A股政策":
+            mm("上证","上证"); mm("创业板","创业板")
+        else:
+            mm("纳斯达克","纳指"); mm("上证","上证")
+        return " ｜ ".join(parts[:4]) if parts else "暂无可用行情验证"
+    except Exception:
+        return "暂无可用行情验证"
+
+TOPIC_PROXY={
+    "美股宏观":[("纳指","^IXIC",-1),("美债10Y","^TNX",1),("美元","DX-Y.NYB",1)],
+    "全球央行":[("纳指","^IXIC",-1),("美债10Y","^TNX",1),("美元","DX-Y.NYB",1)],
+    "全球经济":[("纳指","^IXIC",1),("铜","HG=F",1),("Brent","BZ=F",1)],
+    "地缘政治":[("Brent","BZ=F",1),("黄金","GC=F",1),("VIX","^VIX",1)],
+    "能源/煤炭":[("Brent","BZ=F",1)],
+    "黄金/宏观":[("黄金","GC=F",1),("美元","DX-Y.NYB",-1)],
+    "有色/铜":[("铜","HG=F",1),("美元","DX-Y.NYB",-1)],
+    "AI/算力":[("纳指","^IXIC",1),("SOX","^SOX",1)],
+    "HBM/存储":[("SOX","^SOX",1)],
+    "全球公司/财报":[("纳指","^IXIC",1),("SOX","^SOX",1)],
+    "CPO/光通信":[("纳指","^IXIC",1)],
+    "半导体设备":[("上证","000001.SS",1)],
+    "A股政策":[("上证","000001.SS",1),("创业板","399006.SZ",1)],
+}
+
+@st.cache_data(ttl=1800)
+def market_multi_period(topic):
+    rows=[]
+    for label,symbol,_ in TOPIC_PROXY.get(topic,[("纳指","^IXIC",1),("上证","000001.SS",1)]):
+        vals=[]
+        for lb in [1,3,5]:
+            vals.append(_range_return(symbol,lb,"1mo"))
+        rows.append((label,*vals))
+    return rows
+
+def news_confirmation(topic, sentiment_score=50):
+    proxies=TOPIC_PROXY.get(topic,[])
+    if not proxies:return "⚪ 暂无明确验证","代理不足"
+    # 情绪为利好时按预期方向检查，利空时方向反转；中性只看是否有明显市场动作。
+    sign=1 if sentiment_score>=60 else -1 if sentiment_score<=40 else 0
+    checks=[]
+    for label,symbol,expected in proxies:
+        r=_range_return(symbol,1,"1mo")
+        if r is None:continue
+        if sign==0: checks.append(abs(r)>=0.8)
+        else: checks.append((r*expected*sign)>0.15)
+    if not checks:return "⚪ 暂无明确验证","行情数据不足"
+    ratio=sum(checks)/len(checks)
+    if ratio>=0.67:return "✅ 市场确认",f"{sum(checks)}/{len(checks)} 个代理方向一致"
+    if ratio>=0.34:return "⚠️ 部分确认",f"{sum(checks)}/{len(checks)} 个代理方向一致"
+    return "❌ 尚未确认",f"仅 {sum(checks)}/{len(checks)} 个代理方向一致"
+
+def format_multi_period(topic):
+    rows=market_multi_period(topic)
+    out=[]
+    for label,r1,r3,r5 in rows:
+        def f(v):return "—" if v is None else f"{v:+.2f}%"
+        out.append(f"{label} 1日 {f(r1)} / 3日 {f(r3)} / 5日 {f(r5)}")
+    return " ｜ ".join(out) if out else "暂无多周期代理数据"
+
+def market_regime_summary(S):
+    reasons=[]
+    if S.get("vix",20)>=30:reasons.append("VIX高位")
+    elif S.get("vix",20)>=22:reasons.append("VIX偏高")
+    if S.get("tnx",4.3)>=4.6:reasons.append("美债收益率偏高")
+    if S.get("nas",0)<=-2:reasons.append("科技回撤")
+    if S.get("policy_bad"):reasons.append("政策/限制风险")
+    regime=regime_label(S)
+    return regime,(" + ".join(reasons) if reasons else "风险指标暂未出现明显异常")
+
+def render_market_regime_bar(S):
+    regime,why=market_regime_summary(S)
+    st.info(f"**全球市场状态：{regime}** ｜ {why}")
+
+def render_news_intelligence_summary(df):
+    if df is None or df.empty:return
+    x=rank_global_news(df)
+    critical=int((x["全球重要分"]>=82).sum())
+    recent24=int((x["发布时间"].apply(news_age_hours)<=24).sum())
+    official=int(x["来源"].apply(lambda z: source_type_label(z)=="🏛️ 一手官方").sum())
+    a,b,c,d=st.columns(4)
+    a.metric("🔴 必须知道",critical)
+    b.metric("24小时内",recent24)
+    c.metric("一手官方",official)
+    d.metric("权威/A级",int((x["可信度"]=="A").sum()))
+    top=x.head(3)
+    if len(top):
+        st.markdown("### 今日情报主线")
+        for _,r in top.iterrows():
+            st.markdown(f"- **{r['主题']}**｜{r['新闻']}  ")
+            st.caption(f"市场验证：{market_reaction_text(r['主题'])}")
+
 def render_news_cards(df,limit=20,prefix="n"):
     if df is None or df.empty:
         st.caption("暂无匹配的权威资讯")
@@ -833,15 +1141,21 @@ def render_news_cards(df,limit=20,prefix="n"):
         lab="🟢 利好" if r["分数"]>=60 else "🔴 利空" if r["分数"]<=40 else "🟡 中性"
         pub=r["发布时间"].strftime("%m-%d %H:%M") if pd.notna(r["发布时间"]) else r["时间"]
         gscore=int(r.get("全球重要分",0) or 0)
+        priority=news_priority(gscore)
+        age=news_age_hours(r.get("发布时间",pd.NaT))
         with st.container(border=True):
-            st.markdown(f"**全球重要 {gscore}/100｜{r['主题']}｜{lab}｜来源 {r.get('来源','待核验')}**")
+            stype=source_type_label(r.get("来源","待核验"))
+            st.markdown(f"**{priority}｜{r['主题']}｜{lab}**")
+            st.caption(f"{stype} ｜ 来源：{r.get('来源','待核验')}")
+            st.caption(f"全球重要度 {gscore}/100 ｜ 距今约 {age:.0f} 小时")
             st.markdown(f"**事实：** {r['新闻']}")
             st.caption(f"发布时间：{pub} ｜ 可信度：{r['可信度']}")
             st.markdown(f"**工作台判断：** {r['摘要']}")
+            st.caption(f"📈 市场验证：{market_reaction_text(r['主题'])}")
             if r.get("影响基金","无直接核心基金映射")!="无直接核心基金映射":
                 st.caption(f"关联持仓：{r['影响基金']}")
             if r["链接"]:
-                st.link_button("查看原始来源 ↗",r["链接"],key=f"{prefix}_{i}_{r.name}")
+                st.link_button("查看报道 / 来源 ↗",r["链接"],key=f"{prefix}_{i}_{r.name}")
 
 
 def render_global_market_strip(m):
@@ -1564,16 +1878,14 @@ def v37_daily_snapshot(S,news):
         "market_state":S["state"],"risk":S["risk"],"vix":S["vix"],"us10y":S["tnx"],
         "fund_decisions":d[["基金","机会分","今日动作","建议金额","暴露"]].to_dict("records")
     }
-    # 同一天只保存一次，避免 Streamlit 自动刷新造成大量重复记录。
+    # 同一天只保存一次；同时维护一个云端历史列表，避免 Streamlit 休眠后本地历史丢失。
     try:
-        old=[]
-        if os.path.exists(V37_DECISION_FILE):
-            with open(V37_DECISION_FILE,"r",encoding="utf-8") as f:
-                old=[json.loads(x) for x in f if x.strip()]
+        old=get_v43_history()
         if not any(x.get("date")==payload["date"] for x in old):
             with open(V37_DECISION_FILE,"a",encoding="utf-8") as f:
                 f.write(json.dumps(payload,ensure_ascii=False)+"\n")
             cloud_kv_set(f"v37_decision_{payload['date']}",payload)
+            save_v43_history_item(payload)
     except Exception:
         pass
     return payload
@@ -1581,20 +1893,32 @@ def v37_daily_snapshot(S,news):
 def rotation_plan(sec,news,S,max_rotate_pct=8):
     d=dynamic_fund_decisions(S,news).copy()
     radar=opportunity_radar(sec,news,S).copy()
-    sources=d[d["机会分"]<42].sort_values("机会分")
+    costs=portfolio_cost_state().set_index("基金") if len(PORT) else pd.DataFrame()
+    protected={"华安黄金ETF联接C","国泰纳斯达克100","德邦鑫星/CPO","东方人工智能/半导体"}
+    sources=d[d["机会分"]<40].sort_values("机会分")
+    held_targets=d[d["机会分"]>=65].sort_values("机会分",ascending=False)
+    sector_targets=radar[radar["机会分"]>=62].sort_values("机会分",ascending=False)
     targets=[]
-    for _,r in d[d["机会分"]>=63].sort_values("机会分",ascending=False).iterrows():
-        targets.append((r["基金"],r["机会分"],"现有基金",r["参考周期"]))
-    for _,r in radar[radar["机会分"]>=60].sort_values("机会分",ascending=False).iterrows():
-        targets.append((r["板块"],r["机会分"],"新板块",r["参考周期"]))
+    for _,r in held_targets.iterrows():targets.append((r["基金"],"现有基金",int(r["机会分"]),r["参考周期"]))
+    for _,r in sector_targets.iterrows():targets.append((r["板块"],"新板块",int(r["机会分"]),r["参考周期"]))
+    targets=sorted(targets,key=lambda x:x[2],reverse=True)
     rows=[]
-    if not targets:return pd.DataFrame(columns=["资金来源","建议转出","目标方向","目标类型","目标机会分","参考周期","理由"])
-    tdf=pd.DataFrame(targets,columns=["目标方向","目标机会分","目标类型","参考周期"]).drop_duplicates("目标方向").head(4)
-    for i,(_,src) in enumerate(sources.head(4).iterrows()):
-        target=tdf.iloc[i%len(tdf)]
-        amount=min(300,max(50,round(src["当前持仓"]*max_rotate_pct/100/10)*10))
-        if target["目标机会分"]-src["机会分"]<18:continue
-        rows.append([src["基金"],amount,target["目标方向"],target["目标类型"],int(target["目标机会分"]),target["参考周期"],f"机会分差 {int(target['目标机会分']-src['机会分'])}；优先改善资金效率，不以回本为前提"])
+    for _,src in sources.iterrows():
+        if not targets:break
+        tgt=targets[0];gap=tgt[2]-int(src["机会分"])
+        # V43：必须有明显赔率差，核心仓门槛更高，减少来回折腾。
+        min_gap=28 if src["基金"] in protected else 22
+        if gap<min_gap:continue
+        base=min(300,max(50,round(src["当前持仓"]*max_rotate_pct/100/10)*10))
+        pnl=None
+        try:pnl=float(costs.loc[src["基金"],"累计收益率%"] )
+        except Exception:pass
+        # 浮亏较大时不机械割肉；除非赔率差特别大。
+        if pnl is not None and pnl<=-12 and gap<35:continue
+        if src["基金"] in protected:base=min(base,150)
+        reason=f"机会分差 {gap} 分；先小比例验证，避免为换仓而换仓"
+        if pnl is not None:reason+=f"；当前累计收益率 {pnl:+.1f}%"
+        rows.append([src["基金"],base,tgt[0],tgt[1],tgt[2],tgt[3],reason])
     return pd.DataFrame(rows,columns=["资金来源","建议转出","目标方向","目标类型","目标机会分","参考周期","理由"])
 
 def render_rotation(sec,news,S):
@@ -1629,22 +1953,22 @@ def render_withdraw_cash(S,news):
 
 def render_validation(S,news):
     v37_daily_snapshot(S,news)
-    st.caption("V37 从现在开始每天保存一次决策快照。5/20/60日后才能真正评价当时建议；下表先显示各方向当前代理资产的阶段收益。")
+    st.caption("V44 会把每日决策同时保存到本地与 dashboard_kv 云端历史。5/20/60日后才评价当时建议，避免用今天的涨跌冒充历史命中率。")
     p=proxy_returns_table()
     st.dataframe(p,hide_index=True,use_container_width=True)
-    hist=[]
-    try:
-        if os.path.exists(V37_DECISION_FILE):
-            with open(V37_DECISION_FILE,"r",encoding="utf-8") as f:hist=[json.loads(x) for x in f if x.strip()]
-    except Exception:hist=[]
-    a,b,c=st.columns(3)
+    hist=get_v43_history()
+    a,b,c,d=st.columns(4)
     a.metric("已积累决策日",len(hist))
     b.metric("5日验证","可用" if len(hist)>=5 else f"还差 {max(0,5-len(hist))} 日")
-    c.metric("20/60日验证",("已进入20日" if len(hist)>=20 else "积累中") + (" / 已进入60日" if len(hist)>=60 else ""))
+    c.metric("20日验证","可用" if len(hist)>=20 else f"还差 {max(0,20-len(hist))} 日")
+    d.metric("60日验证","可用" if len(hist)>=60 else f"还差 {max(0,60-len(hist))} 日")
     if hist:
         latest=hist[-1]
-        st.caption(f"最近保存：{latest.get('date')}｜风险 {latest.get('risk')}｜{latest.get('market_state')}")
-    st.info("这里不会把‘当前上涨’伪装成过去建议的命中率。只有历史建议已经经过对应时间窗口后，才计入真实验证。")
+        st.caption(f"最近保存：{latest.get('date')}｜风险 {latest.get('risk')}｜{latest.get('market_state')}｜云端历史 {'已启用' if CLOUD else '未连接，当前仅本地'}")
+        with st.expander("查看最近10个决策日"):
+            vv=pd.DataFrame([{"日期":x.get("date"),"市场状态":x.get("market_state"),"风险":x.get("risk"),"VIX":x.get("vix"),"美债10Y":x.get("us10y")} for x in hist[-10:]])
+            st.dataframe(vv,hide_index=True,use_container_width=True)
+    st.info("新闻卡片中的1/3/5日是当前滚动代理表现；真正的‘这条历史建议后来是否正确’仍只在对应观察窗口成熟后计入。")
 
 def render_v37_command_center(sec,news,S):
     d=dynamic_fund_decisions(S,news); r=opportunity_radar(sec,news,S)
@@ -1663,7 +1987,7 @@ def render_v37_command_center(sec,news,S):
 
 CATEGORY_PAGES={
     "🎯 今日决策":["⚡ 今日决策","💰 买卖与资金","🧭 中期策略","📅 事件与计划"],
-    "📰 市场资讯":["⭐ 今日必看","🌐 全球要闻","📈 市场与宏观","🧩 产业与资源"],
+    "📰 市场资讯":["⭐ 今日必看","🌐 全球重大新闻","📊 市场与产业"],
     "📊 市场研究":["📊 市场与机会","🧪 决策验证","▦ 板块深度"],
     "💼 组合分析":["💼 我的基金","🩺 组合诊断","🧬 底层持仓"],
     "⚙️ 资金与管理":["💼 持仓与资金","📒 交易记录","⚙️ 系统与规则"],
@@ -1687,6 +2011,7 @@ def render(page):
     now=datetime.now(TZ)
     st.markdown(f"# {page}")
     render_global_market_strip(m)
+    render_market_regime_bar(S)
 
     if page=="⚡ 今日决策":
         full_news=rank_global_news(getnews("full"))
@@ -1751,26 +2076,33 @@ def render(page):
         else: st.caption("暂无已确认事件")
         st.caption("只维护可靠日期；CPI、非农、FOMC、重要财报和政策事件作为动态仓位前置风险条件。")
 
-    elif page in ["⭐ 今日必看","🌐 全球要闻","📈 市场与宏观","🧩 产业与资源"]:
+    elif page in ["⭐ 今日必看","🌐 全球重大新闻","📊 市场与产业"]:
         full_news=rank_global_news(getnews("full"))
         x=full_news[full_news["可信度"].isin(["A","B"])].copy() if not full_news.empty else full_news
+        if x is not None and not x.empty:
+            x=x[x["发布时间"].apply(news_age_hours)<=168]
+            x=dedupe_news_events(x)
         topic_map={
-            "🌐 全球要闻":["全球政治","地缘政治","全球经济","全球央行","贸易政策","全球公司/财报"],
-            "📈 市场与宏观":["美股宏观","黄金/宏观","全球经济","全球央行","贸易政策","A股政策"],
-            "🧩 产业与资源":["AI/算力","CPO/光通信","HBM/存储","半导体设备","创新药","机器人","有色/铜","能源/煤炭","电力/电网","消费/白酒","券商","红利/央企","银行/保险"],
+            "🌐 全球重大新闻":["全球政治","地缘政治","全球经济","全球央行","贸易政策","全球公司/财报"],
+            "📊 市场与产业":["美股宏观","黄金/宏观","全球经济","全球央行","贸易政策","A股政策","AI/算力","CPO/光通信","HBM/存储","半导体设备","创新药","机器人","有色/铜","能源/煤炭","电力/电网","消费/白酒","券商","红利/央企","银行/保险"],
         }
         if page in topic_map and not x.empty: x=x[x["主题"].isin(topic_map[page])]
         if page=="⭐ 今日必看":
             if not x.empty:
                 strong=x[x["全球重要分"]>=60]
                 x=(strong if len(strong)>=5 else x).head(12)
-            st.info("按全球重要性排序，不要求与当前持仓相关。优先 Reuters、央行/政府/交易所/公司公告等权威来源；新闻事实与工作台判断分开显示。")
+            st.info("只看近7天 A/B 级高质量资讯，并按全球影响排序；全球重大事件优先，不以持仓为筛选前提。来源待核验的新闻不进入今日必看。同一事件自动去重，事实与工作台判断严格分开；V44 还会为重要新闻保存首次记录时的市场快照，后续做1/3/5日事后验证。")
+        if page=="⭐ 今日必看" and x is not None and not x.empty:
+            render_news_intelligence_summary(x)
         a,b,c=st.columns(3)
         if not x.empty:
             a.metric("权威资讯",len(x))
             b.metric("最高重要分",int(x["全球重要分"].max()))
             c.metric("A 级来源",int((x["可信度"]=="A").sum()))
-        render_news_cards(x,30,"v40_news")
+        render_news_cards(x,30,"v44_news")
+        if page=="⭐ 今日必看" and x is not None and not x.empty:
+            with st.expander("查看新闻1/3/5日事后验证",expanded=False):
+                render_news_validation_ledger(x)
 
     elif page=="📊 市场与机会":
         full_news=getnews("full")
@@ -1796,12 +2128,36 @@ def render(page):
         st.write("核心成分：",r["核心成分"])
 
     elif page=="💼 我的基金":
-        chosen=st.selectbox("选择我的基金",PORT["基金"].tolist(),key="v40_fund")
+        cost_state=portfolio_cost_state()
+        known=cost_state[cost_state["累计投入"]>0].copy()
+        if not known.empty:
+            total_mv=float(known["当前市值"].sum()); total_inv=float(known["累计投入"].sum()); total_pnl=total_mv-total_inv
+            aa,bb,cc,dd=st.columns(4)
+            aa.metric("已录成本基金",f"{len(known)}/{len(PORT)}")
+            bb.metric("已录成本合计",f"¥{total_inv:,.2f}")
+            cc.metric("对应当前市值",f"¥{total_mv:,.2f}")
+            dd.metric("对应累计盈亏",f"¥{total_pnl:+,.2f}",f"{(total_pnl/total_inv*100):+.2f}%" if total_inv>0 else None)
+        else:
+            st.info("尚未录入任何真实累计投入。工作台不会用持仓金额反推成本。")
+        chosen=st.selectbox("选择我的基金",PORT["基金"].tolist(),key="v44_fund")
         r=PORT[PORT["基金"]==chosen].iloc[0]
+        costs=get_cost_basis_map(); rec=costs.get(chosen,{}) if isinstance(costs,dict) else {}
+        invested=float(rec.get("累计投入",0) or 0); mv=float(r["金额"])
+        pnl=(mv-invested) if invested>0 else None; ret=(pnl/invested*100) if invested>0 else None
         a,b,c,d=st.columns(4)
-        a.metric("当前金额",f'¥{r["金额"]:,.2f}');b.metric("定位",r["定位"]);c.metric("主要暴露",r["主要暴露"]);d.metric("动作",r["动作"])
+        a.metric("当前市值",f'¥{mv:,.2f}')
+        b.metric("累计投入","未录入" if invested<=0 else f'¥{invested:,.2f}')
+        c.metric("累计盈亏","—" if pnl is None else f'¥{pnl:+,.2f}')
+        d.metric("累计收益率","—" if ret is None else f'{ret:+.2f}%')
+        st.caption(f"定位：{r['定位']} ｜ 主要暴露：{r['主要暴露']} ｜ 当前动作框架：{r['动作']}")
+        with st.expander("录入 / 修改真实累计投入"):
+            val=st.number_input("累计实际投入金额（元）",min_value=0.0,value=float(invested),step=100.0,key=f"cost_{chosen}")
+            if st.button("保存成本数据",key=f"save_cost_{chosen}"):
+                costs[chosen]={"累计投入":float(val),"updated_at":datetime.now(TZ).isoformat()}
+                save_cost_basis_map(costs); st.success("已保存；云端可用时会同步。")
+                st.rerun()
+            st.caption("这里不猜成本。只有你录入真实累计投入后，工作台才计算盈亏。")
         if chosen in TOP_HOLDINGS: st.dataframe(pd.DataFrame(TOP_HOLDINGS[chosen],columns=["重仓资产","权重%"]),hide_index=True,use_container_width=True)
-        st.caption("V40 暂不伪造成本和盈亏；待录入真实成本后再计算累计收益与收益率。")
 
     elif page=="🩺 组合诊断":
         st.dataframe(portfolio_weights()[["基金","金额","定位","主要暴露","权重"]],hide_index=True,use_container_width=True)
@@ -1845,4 +2201,4 @@ def render(page):
             st.dataframe(data_health_table(m,sec,news),hide_index=True,use_container_width=True)
 
 render(page)
-st.caption("V40 · 全球市场终端版｜全球重要资讯排序｜全市场状态条｜今日四段式决策｜旧页面分支已清理")
+st.caption("V44 · 情报闭环增强版｜权威新闻留痕｜1/3/5日事后验证｜全球市场状态｜真实盈亏框架")
