@@ -10,7 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client
 
-st.set_page_config(page_title="阮嘤基金投资工作台 V46", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="阮嘤基金投资工作台 V47", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
 HEADERS={"User-Agent":"Mozilla/5.0"}
 TZ=ZoneInfo("Asia/Shanghai")
@@ -894,7 +894,16 @@ def getnews(mode="lite"):
         # A股、政策与资源
         "A股 政策 证监会 科技股 when:3d","证监会 官方 政策 when:7d","中国 央行 货币政策 when:7d",
         "创新药 license-out FDA when:7d","人形机器人 humanoid robot when:7d","铜 紫金矿业 洛阳钼业 when:7d","电网 储能 电力设备 when:7d",
-        "白酒 消费 A股 when:7d","券商 东方财富 中信证券 when:7d","A股 红利 高股息 央企 when:7d","银行 保险 A股 when:7d","煤炭 能源 中国神华 when:7d"
+        "白酒 消费 A股 when:7d","券商 东方财富 中信证券 when:7d","A股 红利 高股息 央企 when:7d","银行 保险 A股 when:7d","煤炭 能源 中国神华 when:7d",
+        # V47：扩展全球新闻面，不只围绕持仓与 Reuters 搜索
+        "AP world breaking news economy markets when:2d","Associated Press geopolitics economy when:3d",
+        "Federal Reserve official statement speech when:7d","US Treasury official markets sanctions when:7d",
+        "ECB official monetary policy when:7d","Bank of Japan official monetary policy when:7d",
+        "中国人民银行 货币政策 最新 when:7d","国务院 经济 政策 最新 when:7d",
+        "财联社 全球 市场 快讯 when:2d","第一财经 全球 市场 when:3d",
+        "Reuters US stocks Wall Street earnings when:2d","Reuters Asia stocks markets currencies when:2d",
+        "Reuters China stocks Hong Kong markets when:2d","Reuters Europe stocks markets when:2d",
+        "Reuters technology chips AI Nvidia AMD Broadcom when:3d","Reuters commodities gold copper oil when:2d"
     ]
     lite_queries=[
         "Reuters world markets breaking news when:2d","Reuters Federal Reserve inflation jobs Treasury when:3d",
@@ -912,7 +921,7 @@ def getnews(mode="lite"):
             r=requests.get(url,headers=HEADERS,timeout=3.5)
             r.raise_for_status()
             feed=feedparser.parse(r.content)
-            for e in feed.entries[:8]:
+            for e in feed.entries[:15]:
                 title=e.get("title","").strip()
                 if title:
                     out.append((title,e.get("published",""),e.get("link","")))
@@ -980,7 +989,7 @@ m,sec,news,S=compute()
 
 with st.sidebar:
     st.markdown("## 📊 阮嘤基金")
-    st.caption("V46 · 真实新闻·极简研究版")
+    st.caption("V47 · 新闻中心·手机极简版")
     page=st.radio("功能导航",[
         "📰 时事新闻","📈 市场板块","🎯 操作建议","⚙️ 数据与管理"
     ],label_visibility="collapsed")
@@ -1167,7 +1176,7 @@ def render_news_cards(df,limit=20,prefix="n"):
             st.caption(f"{priority}　·　{r['主题']}　·　{pub}　·　{source}")
             st.markdown(f"**{r['新闻']}**")
             if link:
-                st.link_button(f"打开 {source} 原报道 ↗",link,key=f"{prefix}_{i}_{r.name}")
+                st.link_button(f"打开 {source} 新闻原文 ↗",link,key=f"{prefix}_{i}_{r.name}")
             st.caption(f"事实来源：{source}｜可信度 {r['可信度']}｜重要度 {gscore}/100")
             with st.expander("工作台分析",expanded=False):
                 st.write(r['摘要'])
@@ -2101,19 +2110,19 @@ def render(page):
 
     elif page=="📰 实时新闻":
         full_news=rank_global_news(getnews("full"))
-        x=full_news[full_news["可信度"].isin(["A","B"])].copy() if not full_news.empty else full_news
+        x=full_news.copy() if not full_news.empty else full_news
         if x is not None and not x.empty:
             x=x[x["发布时间"].apply(news_age_hours)<=168]
             x=dedupe_news_events(x)
-            # 新闻板块首先按发布时间展示，全球重要分作为第二排序键。
-            x=x.sort_values(["发布时间","全球重要分"],ascending=[False,False],na_position="last")
-        st.info("新闻流优先真实与时效：近7天 A/B 级来源，大量展示，不以你的持仓为筛选前提。页面打开时约60秒检查一次，新闻抓取缓存约180秒；网页关闭或 Streamlit 休眠时不冒充后台实时推送。")
+            # A/B 权威来源优先，但不再把其他可核验新闻全部过滤掉；先保证新闻中心有足够广度。
+            x["来源优先"]=x["可信度"].map({"A":0,"B":1,"C":2}).fillna(3)
+            x=x.sort_values(["来源优先","发布时间","全球重要分"],ascending=[True,False,False],na_position="last")
+        # 手机首屏只保留一条极薄状态，不再重复市场行情、四个统计卡或“今日情报主线”。
         if x is not None and not x.empty:
-            render_news_intelligence_summary(x)
-            a,b=st.columns(2)
-            a.metric("当前新闻",len(x))
-            b.metric("A 级来源",int((x["可信度"]=="A").sum()))
-        render_news_cards(x,80,"v45_news")
+            recent24=int((x["发布时间"].apply(news_age_hours)<=24).sum())
+            ab=int(x["可信度"].isin(["A","B"]).sum())
+            st.markdown(f'<div class="v47-news-status">更新 {now.strftime("%H:%M")}　·　24h {recent24} 条　·　权威来源 {ab} 条　·　共 {len(x)} 条</div>',unsafe_allow_html=True)
+        render_news_cards(x,160,"v47_news")
         if x is not None and not x.empty:
             with st.expander("新闻1/3/5日事后验证",expanded=False):
                 render_news_validation_ledger(x)
@@ -2234,5 +2243,33 @@ st.markdown("""
 </style>
 """,unsafe_allow_html=True)
 
+
+# ===== V47 手机新闻中心：修复侧栏残影 + 高密度新闻流 =====
+st.markdown("""
+<style>
+.v47-news-status{
+  font-size:11px;color:#667085;padding:4px 2px 7px;margin:0 0 6px;
+  border-bottom:1px solid #eef1f5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+}
+@media(max-width:700px){
+  /* 主内容必须吃满手机宽度；侧栏关闭时不保留灰色占位 */
+  [data-testid="stAppViewContainer"] main{width:100%!important;margin-left:0!important}
+  [data-testid="stMain"]{margin-left:0!important;width:100%!important}
+  [data-testid="stMainBlockContainer"]{padding:2.45rem .42rem 1rem!important;max-width:100%!important}
+  .block-container{padding-left:.42rem!important;padding-right:.42rem!important;max-width:100%!important}
+  section[data-testid="stSidebar"]{position:fixed!important;z-index:999999!important}
+  section[data-testid="stSidebar"][aria-expanded="false"]{min-width:0!important;width:0!important;max-width:0!important}
+  section[data-testid="stSidebar"][aria-expanded="false"] > div{display:none!important}
+  /* 新闻卡片更紧凑：一屏显示更多新闻 */
+  div[data-testid="stVerticalBlockBorderWrapper"]{margin-bottom:4px!important}
+  div[data-testid="stVerticalBlockBorderWrapper"] > div{padding:.48rem .52rem!important}
+  div[data-testid="stExpander"]{margin-top:2px!important}
+  .stLinkButton a{min-height:32px!important;padding:.25rem .55rem!important}
+  p{margin-bottom:.30rem!important}
+  h1{margin-bottom:.32rem!important}
+}
+</style>
+""",unsafe_allow_html=True)
+
 render(page)
-st.caption("V46 · 真实新闻·极简研究版｜真实来源链接｜全站去重复｜手机高密度｜长线研究")
+st.caption("V47 · 新闻中心·手机极简版｜新闻原文链接｜全站去重复｜手机高密度｜长线研究")
